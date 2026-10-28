@@ -48,8 +48,9 @@ public sealed class GatewayConnectionValidatorTests
                 handle.Invoke(this, ["connect", error.RootElement, 0L]);
             }
             RaiseStatusChanged(terminalStatus);
-            // No real Gateway or close handshake: settle the fixture socket before ConnectAsync returns.
-            Dispose();
+            // Leave pairing sockets open to verify cleanup cannot replace the captured hint.
+            if (!pairingRequired)
+                Dispose();
         }
     }
 

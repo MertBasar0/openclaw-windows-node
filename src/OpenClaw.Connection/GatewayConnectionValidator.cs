@@ -198,7 +198,13 @@ internal sealed class GatewayConnectionValidator(
             client.PairingRequired -= PairingRequired;
             client.StatusChanged -= StatusChanged;
             if (!cancellationToken.IsCancellationRequested)
-                await client.DisconnectAsync().WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+            {
+                if (completion.Task.IsCompletedSuccessfully &&
+                    completion.Task.Result.ErrorKind == GatewayErrorKind.PairingRequired)
+                    client.Dispose();
+                else
+                    await client.DisconnectAsync().WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+            }
         }
     }
 
