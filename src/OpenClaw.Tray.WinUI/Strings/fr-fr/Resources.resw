@@ -7710,6 +7710,18 @@ Choisissez {1} pour quitter cet aperçu sans démarrer la migration et continuer
 
 Vos paramètres, votre passerelle, vos fichiers et vos modèles restent en place.</value>
   </data>
+  <data name="Migration2_AwaitingRemovalWithApps" xml:space="preserve">
+    <value>Votre configuration a été validée et la fin de la migration enregistrée.
+
+1. Ouvrez Applications installées.
+À désinstaller : {0} (installation de bureau)
+À conserver : {1}, version {2} (Microsoft Store)
+Laissez les autres applications installées.
+
+2. Revenez ici et choisissez Réessayer pour vérifier la désinstallation et terminer.
+
+Vos paramètres, votre passerelle, vos fichiers et vos modèles restent en place.</value>
+  </data>
   <data name="Migration2_RemovalTitle" xml:space="preserve">
     <value>Désinstallez l'application précédente</value>
   </data>
@@ -7771,6 +7783,17 @@ Vos paramètres, votre passerelle, vos fichiers et vos modèles restent en place
   </data>
   <data name="Migration2_InnoGranted" xml:space="preserve">
     <value>Le consentement à la migration a été enregistré. Installez et ouvrez la version du Store pour continuer. Gardez cette application installée jusqu'à la confirmation de la fin de la migration.</value>
+  </data>
+  <data name="Migration2_InnoRepairRequired" xml:space="preserve">
+    <value>Des fichiers requis de l’installation sont manquants ou invalides. Téléchargez le programme d’installation complet d’OpenClaw. Quittez OpenClaw, exécutez le programme sur cette installation avec le même utilisateur Windows, puis rouvrez l’application et réessayez la migration. Ne désinstallez pas OpenClaw au préalable.
+
+Le programme d’installation répare les fichiers d’installation. La migration doit encore satisfaire aux vérifications de compatibilité de l’application du Store.</value>
+  </data>
+  <data name="Migration2_InnoSetupLinkFailed" xml:space="preserve">
+    <value>Windows n’a pas pu ouvrir le lien de téléchargement du programme d’installation. Copiez cette adresse dans votre navigateur : {0}. Ne désinstallez pas OpenClaw au préalable.</value>
+  </data>
+  <data name="Migration2_InnoDownloadSetup.Content" xml:space="preserve">
+    <value>Télécharger le programme de réparation</value>
   </data>
   <data name="Migration2_InnoFailed" xml:space="preserve">
     <value>OpenClaw n'a pas pu enregistrer le consentement à la migration ou ouvrir la fiche du Store. Consultez le journal de l'application et réessayez. Ne désinstallez pas cette application.</value>

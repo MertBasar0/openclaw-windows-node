@@ -7710,6 +7710,18 @@
 
 您的設定、閘道、檔案和模型將保留在原處。</value>
   </data>
+  <data name="Migration2_AwaitingRemovalWithApps" xml:space="preserve">
+    <value>您的設定已通過驗證，移轉完成狀態已記錄。
+
+1. 開啟「已安裝的應用程式」。
+解除安裝：{0}（桌面安裝版）
+保留：{1}，版本 {2}（Microsoft Store）
+保留所有其他應用程式。
+
+2. 返回此處並選擇「重試」以驗證移除狀態並完成移轉。
+
+您的設定、閘道、檔案和模型將保留在原處。</value>
+  </data>
   <data name="Migration2_RemovalTitle" xml:space="preserve">
     <value>解除安裝舊版應用程式</value>
   </data>
@@ -7771,6 +7783,17 @@
   </data>
   <data name="Migration2_InnoGranted" xml:space="preserve">
     <value>已儲存移轉授權。請安裝並開啟 Store 版本以繼續。在確認移轉完成之前，請保留此應用程式。</value>
+  </data>
+  <data name="Migration2_InnoRepairRequired" xml:space="preserve">
+    <value>所需的安裝檔案遺失或無效。請下載完整的 OpenClaw 安裝程式。結束 OpenClaw，以同一 Windows 使用者執行安裝程式覆蓋此安裝，然後重新開啟應用程式並重試移轉。請勿先解除安裝 OpenClaw。
+
+安裝程式會修復安裝檔案。移轉仍須通過 Store 應用程式的相容性檢查。</value>
+  </data>
+  <data name="Migration2_InnoSetupLinkFailed" xml:space="preserve">
+    <value>Windows 無法開啟安裝程式下載連結。請將此位址複製到瀏覽器中：{0}。請勿先解除安裝 OpenClaw。</value>
+  </data>
+  <data name="Migration2_InnoDownloadSetup.Content" xml:space="preserve">
+    <value>下載安裝程式以修復</value>
   </data>
   <data name="Migration2_InnoFailed" xml:space="preserve">
     <value>OpenClaw 無法儲存移轉授權或開啟 Store 中的應用程式頁面。請查看應用程式記錄並重試。請勿解除安裝此應用程式。</value>

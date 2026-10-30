@@ -7779,6 +7779,18 @@ Choose {1} to exit this preview without starting migration and continue using th
 
 Your settings, gateway, files, and models stay in place.</value>
   </data>
+  <data name="Migration2_AwaitingRemovalWithApps" xml:space="preserve">
+    <value>Your setup has been validated and migration completion recorded.
+
+1. Open Installed apps.
+Remove: {0} (desktop installer)
+Keep: {1}, version {2} (Microsoft Store)
+Leave all other apps installed.
+
+2. Return here and choose Retry to verify removal and finish.
+
+Your settings, gateway, files, and models stay in place.</value>
+  </data>
   <data name="Migration2_RemovalTitle" xml:space="preserve">
     <value>Remove the previous app</value>
   </data>
@@ -7840,6 +7852,17 @@ Your settings, gateway, files, and models stay where they are.</value>
   </data>
   <data name="Migration2_InnoGranted" xml:space="preserve">
     <value>Migration consent was saved. Install and open the Store version to continue. Keep this app installed until migration completion is confirmed.</value>
+  </data>
+  <data name="Migration2_InnoRepairRequired" xml:space="preserve">
+    <value>Required installation files are missing or invalid. Download the full OpenClaw Setup installer. Exit OpenClaw, run Setup over this installation as the same Windows user, then reopen the app and retry migration. Do not uninstall OpenClaw first.
+
+Setup repairs the installation files. Migration must still pass the Store app’s compatibility checks.</value>
+  </data>
+  <data name="Migration2_InnoSetupLinkFailed" xml:space="preserve">
+    <value>Windows could not open the Setup download link. Copy this address into your browser: {0}. Do not uninstall OpenClaw first.</value>
+  </data>
+  <data name="Migration2_InnoDownloadSetup.Content" xml:space="preserve">
+    <value>Download Setup to repair</value>
   </data>
   <data name="Migration2_InnoFailed" xml:space="preserve">
     <value>OpenClaw could not save migration consent or open the Store listing. Check the app log and retry. Do not uninstall this app.</value>
