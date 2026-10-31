@@ -66,32 +66,15 @@ try {
     $domain = Invoke-Inspector -Arguments @('analyze',$dump,'-c','dumpdomain','-c','exit') -Label 'dumpdomain'
     $runtime = Invoke-Inspector -Arguments @('analyze',$dump,'-c','eeversion','-c','exit') -Label 'eeversion'
     $null = Assert-SameProcess
-    $bad = '(?i)\b(?:error|failed|unable|unsupported|interrupted|aborted)\b|could not|not supported|out of memory|unknown module'
-    if ($domain -match $bad -or $runtime -match $bad) { throw 'SOS_REPORTED_INCOMPLETE_OR_UNSUPPORTED_DATA' }
+    $parserDiagnostics = [ordered]@{}
+    $receipt.ParserDiagnostics = $parserDiagnostics
+    . "$PSScriptRoot\Parse-SosInventory.ps1"
+    $inventory = Get-SosManagedInventory -Text $domain -Diagnostics $parserDiagnostics
+    if ($runtime -match '(?i)\b(?:error|failed|unable|unsupported|interrupted|aborted)\b|could not|not supported|out of memory') { throw 'SOS_RUNTIME_IDENTIFICATION_FAILED' }
     if ($runtime -notmatch '\b10\.0\.') { throw 'EXPECTED_DOTNET10_RUNTIME_NOT_IDENTIFIED' }
-    if ($domain -notmatch '(?m)^Domain\s+1:\s+[0-9a-fA-F`]+\s*$' -or [regex]::Matches($domain,'(?m)^Domain\s+\d+:').Count -ne 1) { throw 'DEFAULT_DOMAIN_NOT_UNAMBIGUOUSLY_ENUMERATED' }
-    $starts = [regex]::Matches($domain,'(?m)^Assembly:')
-    $assemblies = [regex]::Matches($domain,'(?ms)^Assembly:\s+([0-9a-fA-F`]+)(\s+\(Dynamic\))?\s+\[([^\]\r\n]+)\]\s*\r?\n(.*?)(?=^Assembly:|^Domain\s+\d+:|^Shared Domain:|^System Domain:|\z)')
-    if ($starts.Count -eq 0 -or $assemblies.Count -ne $starts.Count) { throw 'UNRESOLVED_ASSEMBLY_ENTRY' }
-    $clean = [Collections.Generic.List[object]]::new()
-    foreach ($assembly in $assemblies) {
-        $body = $assembly.Groups[4].Value
-        if ($body -notmatch '(?m)^\s+Module\s*$') { throw 'ASSEMBLY_MODULE_ENUMERATION_MISSING' }
-        $rows = [regex]::Matches($body,'(?m)^\s+([0-9a-fA-F`]+)\s+([^\r\n]+)\s*$')
-        if ($rows.Count -eq 0) { throw 'ASSEMBLY_MODULE_ENUMERATION_EMPTY' }
-        $names = @($rows | ForEach-Object {
-            $name = $_.Groups[2].Value.Trim()
-            if ($name -eq 'Dynamic Module' -and $assembly.Groups[2].Success) { 'Dynamic Module' }
-            elseif ($name -match '(?i)\.(?:dll|exe)$') { [IO.Path]::GetFileName($name) }
-            else { throw 'UNRESOLVED_MANAGED_MODULE_NAME' }
-        })
-        $clean.Add([ordered]@{Assembly=[IO.Path]::GetFileName($assembly.Groups[3].Value.Trim());Dynamic=$assembly.Groups[2].Success;Modules=$names})
-    }
-    $allModules = @($clean | ForEach-Object { $_.Modules })
-    if ($allModules -notcontains 'OpenClaw.Tray.WinUI.dll' -or $allModules -notcontains 'System.Private.CoreLib.dll') { throw 'APPLICATION_OR_CORE_MANAGED_MODULE_MISSING' }
-    # Failed/unnamed rows are rejected above; no-match alone never establishes absence.
-    $hookSeen = [bool](@($clean | Where-Object { $_.Assembly -match '(?i)^Issue1676\.StartupHook(?:\.dll)?$' -or $_.Modules -contains 'Issue1676.StartupHook.dll' }).Count)
-    $receipt.CompleteInventory = $true; $receipt.AssemblyCount = $clean.Count; $receipt.ModuleCount = $allModules.Count
+    $clean = $inventory.Assemblies
+    $hookSeen = $inventory.HookPresent
+    $receipt.CompleteInventory = $true; $receipt.AssemblyCount = $inventory.AssemblyCount; $receipt.ModuleCount = $inventory.ModuleCount; $receipt.UnnamedDynamicAssemblyCount = $inventory.UnnamedDynamicAssemblyCount
     $receipt.InspectedUtc = [DateTime]::UtcNow.ToString('o'); $receipt.HookPresent = $hookSeen
     $receipt.Result = if ($hookSeen) { 'FAIL' } else { 'PASS' }
     $receipt.Reason = if ($hookSeen) { 'HOOK_PRESENT_AFTER_RESTART' } else { 'COMPLETE_MANAGED_INVENTORY_WITHOUT_HOOK_AT_OBSERVED_BOUNDARY' }

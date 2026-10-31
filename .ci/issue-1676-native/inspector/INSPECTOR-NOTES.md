@@ -36,7 +36,7 @@ The maintained SOS implementation at the exact NuGet source commit was inspected
 - [`DumpDomain` in strike.cpp](https://github.com/dotnet/diagnostics/blob/ad724c4b85e7ae775e42f393c6e95a7557a57954/src/SOS/Strike/strike.cpp) retrieves and iterates the DAC domain list.
 - [`DomainInfo` and `AssemblyInfo` in util.cpp](https://github.com/dotnet/diagnostics/blob/ad724c4b85e7ae775e42f393c6e95a7557a57954/src/SOS/Strike/util.cpp) enumerate each domain's DAC `AssemblyCount` entries, then each assembly's DAC `ModuleCount` entries. Failed assembly/name/module reads produce errors or incomplete rows.
 
-The parser requires the single CoreCLR Domain1, resolves **every** printed Assembly entry into a nonempty named assembly with a Module table and resolved module rows, rejects diagnostic errors/unknown/incomplete rows, requires both `OpenClaw.Tray.WinUI.dll` and `System.Private.CoreLib.dll`, and identifies the .NET10 runtime. Only then is absence of `Issue1676.StartupHook` checked. The pinned startup hook is a non-dynamic managed assembly loaded into the default context; domain-wide enumeration covers it. Recognized dynamic modules are retained as dynamic entries; unknown non-dynamic names cannot pass.
+The parser requires the single CoreCLR Domain1, resolves **every** file-backed Assembly entry into a nonempty named assembly with a Module table and resolved module rows, classifies the exact DAC Reflection.Emit `(Dynamic) []` / `Dynamic Module` form separately, and rejects all other unnamed, inconsistent, diagnostic-error or incomplete rows, requires both `OpenClaw.Tray.WinUI.dll` and `System.Private.CoreLib.dll`, and identifies the .NET10 runtime. Only then is absence of `Issue1676.StartupHook` checked. The pinned startup hook is a non-dynamic managed assembly loaded into the default context; domain-wide enumeration covers it. Recognized reflection-emitted modules are retained as `<reflection-emit>` entries with their observed count; empty names are accepted only with the DAC Dynamic flag and exclusively `Dynamic Module` rows. Unknown non-dynamic names and inconsistent dynamic entries cannot pass. This file-loaded startup hook is not a Reflection.Emit assembly.
 
 This uses source-backed enumeration semantics plus exact native output, not merely an exit-zero or no-match grep. An unexpected output shape, timeout, partial dump, unavailable DAC/SOS, process exit/reuse or runtime error yields BLOCKED. A detected hook yields FAIL. PASS covers the observed post-startup boundary only, not arbitrary process history. Native proof has not been run during preparation.
 
@@ -54,3 +54,19 @@ Public outputs are `hook-absence.json` (PID/start-time, hashes, counts, result) 
 - No additional fake application/probe was added. Exact B's fresh startup plus full managed inventory is the required observation boundary; source review and parsing do not claim the native tool can execute successfully.
 
 References: [Microsoft dotnet-dump documentation](https://learn.microsoft.com/en-us/dotnet/core/diagnostics/dotnet-dump), [NuGet package](https://www.nuget.org/packages/dotnet-dump/10.0.750501).
+
+## Recovery after run 41218421702
+
+That run reached the actual A-to-B update and fresh B startup; inspector collection and analysis reached `UNRESOLVED_ASSEMBLY_ENTRY`. Private raw text was deleted as designed, so its exact rejected row cannot be recovered. Do not state the dynamic case as a proven diagnosis of that particular output until the next observed shape/count establishes it.
+
+A definite source-format bug was nevertheless reproduced in the old parser: it counted three Assembly headers but parsed only two when the third was the legitimate Reflection.Emit form. Named LF and CRLF inputs both passed, so this is not a demonstrated line-ending bug.
+
+Exact supporting source:
+
+- [.NET10.0.13 request.cpp lines2732-2755](https://github.com/dotnet/runtime/blob/v10.0.13/src/coreclr/debug/daccess/request.cpp#L2732-L2755): `GetAssemblyName` returns E_FAIL for Reflection.Emit without a PE path.
+- [Pinned SOS util.cpp lines1831-1844](https://github.com/dotnet/diagnostics/blob/ad724c4b85e7ae775e42f393c6e95a7557a57954/src/SOS/Strike/util.cpp#L1831-L1844): the DAC Dynamic marker is printed, then brackets are printed even when name retrieval fails. This produces `(Dynamic) []`.
+- [Pinned SOS util.cpp lines1727-1738](https://github.com/dotnet/diagnostics/blob/ad724c4b85e7ae775e42f393c6e95a7557a57954/src/SOS/Strike/util.cpp#L1727-L1738): a reflection module without a filename prints `Dynamic Module`; an unknown ordinary module instead prints `Unknown Module` and still fails our parser.
+
+`Parse-SosInventory.ps1` now owns this strict classification. The absence script calls it and retains bounded `ParserDiagnostics` in its receipt on success or failure: header counts/kinds, unnamed dynamic/non-dynamic counts and module-resolution counts. No raw text, full path, memory address or dump is retained. Successful inventory also records `UnnamedDynamicAssemblyCount` explicitly.
+
+`Test-SosInventoryParser.ps1` uses synthetic strings copied from this source format. It demonstrates the old parser mismatch and passes 12 controls: LF/CRLF, exact Reflection.Emit format, actual hook detection, and rejection of unnamed ordinary entries, inconsistent dynamic entries, malformed headers, missing/truncated/unknown module rows and missing app identity. These are parser controls, not another native update or a substitute for hook-absence proof. The updated three scripts also passed native PowerShell syntax parsing.
