@@ -25,12 +25,12 @@ jobs:
     env:
       DOTNET_CLI_TELEMETRY_OPTOUT: '1'
       DOTNET_NOLOGO: '1'
-      DOTNET_CLI_HOME: ${{ runner.temp }}/issue1642-dotnet
-      NUGET_PACKAGES: ${{ runner.temp }}/issue1642-nuget
 
     steps:
       - name: Preserve reviewed input bytes on the disposable runner
         run: |
+          "DOTNET_CLI_HOME=$(Join-Path $env:RUNNER_TEMP 'issue1642-dotnet')" >> $env:GITHUB_ENV
+          "NUGET_PACKAGES=$(Join-Path $env:RUNNER_TEMP 'issue1642-nuget')" >> $env:GITHUB_ENV
           git config --global core.autocrlf false
           if ($LASTEXITCODE -ne 0) { throw 'Could not disable runner line-ending conversion.' }
           git config --global core.eol lf
