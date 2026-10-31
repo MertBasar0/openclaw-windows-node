@@ -1,0 +1,64 @@
+name: Issue 1642 documentation validation
+on:
+  push:
+    branches: [codex/issue-1642-fix-20261101]
+    paths: ['.github/workflows/issue-1642-docs.yml']
+permissions:
+  contents: read
+jobs:
+  docs:
+    if: github.repository == 'MertBasar0/openclaw-windows-node'
+    runs-on: windows-2025-vs2026
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Preserve source bytes
+        run: |
+          git config --global core.autocrlf false
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot preserve source bytes.' }
+          git config --global core.eol lf
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot preserve source bytes.' }
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          path: control
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: openclaw/openclaw-windows-node
+          ref: ef1df54dfe95a8b0a2ae8033425561136d8a70ef
+          path: source
+          persist-credentials: false
+      - name: Validate documentation on the unchanged candidate
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory evidence | Out-Null
+          $patch = (Resolve-Path control/.ci/issue-1642-fix/CANDIDATE.patch).Path
+          $expected = Get-Content control/.ci/issue-1642-fix/candidate-manifest.json -Raw | ConvertFrom-Json -AsHashtable
+          $hash = (Get-FileHash $patch).Hash
+          if ($hash -ine 'b7af368732969278f35ae670c089968e8940f601b6c69433b6ac6f1b1d384186') { throw 'Candidate identity changed.' }
+          Push-Location source
+          try {
+            if ((git rev-parse HEAD).Trim() -cne 'ef1df54dfe95a8b0a2ae8033425561136d8a70ef') { throw 'Wrong pinned source.' }
+            git apply --check $patch
+            if ($LASTEXITCODE -ne 0) { throw 'Patch not applicable.' }
+            git apply $patch
+            if ($LASTEXITCODE -ne 0) { throw 'Patch application failed.' }
+            foreach ($file in $expected.files.Keys) {
+              if ((Get-FileHash $file).Hash -ine $expected.files[$file].candidateSha256) { throw "Candidate file mismatch: $file" }
+            }
+            & pwsh -NoProfile -File ./scripts/validate-docs.ps1 2>&1 | Tee-Object ../evidence/docs.log
+            $docsExit = $LASTEXITCODE
+            @{ ExitCode=$docsExit; PatchSha256=$hash; ProductBase=$expected.base; WorkflowCommit=$env:GITHUB_SHA; Command='scripts/validate-docs.ps1'; ProductTestsRerun=$false } | ConvertTo-Json | Set-Content ../evidence/docs-result.json
+            if ($docsExit -ne 0) { throw "Documentation validation failed: $docsExit" }
+          } finally { Pop-Location }
+      - name: Retain documentation evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: issue-1642-docs-evidence-${{ github.run_id }}
+          path: evidence/
+          retention-days: 7
+          if-no-files-found: warn
