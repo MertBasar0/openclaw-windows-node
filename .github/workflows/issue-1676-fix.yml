@@ -1,0 +1,138 @@
+name: Issue 1676 patched update proof
+on:
+  push:
+    branches: [codex/issue-1676-fix-20261031]
+    paths:
+      - '.github/workflows/issue-1676-fix.yml'
+      - '.ci/issue-1676-fix/**'
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: issue-1676-fix-${{ github.ref }}
+  cancel-in-progress: false
+defaults:
+  run:
+    shell: pwsh
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+  DOTNET_NOLOGO: '1'
+jobs:
+  build:
+    if: github.repository == 'MertBasar0/openclaw-windows-node'
+    runs-on: windows-2025-vs2026
+    timeout-minutes: 60
+    outputs:
+      candidate-ready: ${{ steps.publish.outputs.candidate-ready }}
+    steps:
+      - name: Preserve source bytes and isolate tools
+        run: |
+          git config --global core.autocrlf false
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot preserve source bytes.' }
+          git config --global core.eol lf
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot preserve source bytes.' }
+          "DOTNET_CLI_HOME=$(Join-Path $env:RUNNER_TEMP 'issue1676-dotnet')" >> $env:GITHUB_ENV
+          "NUGET_PACKAGES=$(Join-Path $env:RUNNER_TEMP 'issue1676-nuget')" >> $env:GITHUB_ENV
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          path: control
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: openclaw/openclaw-windows-node
+          ref: a4dd026cc5f85a444a0fcd05eef5b86282dbda8c
+          path: source
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: '10.0.402'
+      - name: Apply exact reviewed product patch
+        run: |
+          & ./control/.ci/issue-1676-fix/Build-Patched.ps1 -RepoRoot ./source -OutputRoot ./prepared -Stage Prepare
+      - name: Required full build and Shared Tray tests
+        id: validation
+        continue-on-error: true
+        run: |
+          & ./control/.ci/issue-1676-fix/Build-Patched.ps1 -RepoRoot ./source -OutputRoot ./prepared -Stage Validate
+      - name: Publish only patched B payload
+        id: publish
+        env:
+          # Supported unsigned test route; no signing or publication.
+          RequireSignedCleanupHost: 'false'
+        run: |
+          & ./control/.ci/issue-1676-fix/Build-Patched.ps1 -RepoRoot ./source -OutputRoot ./prepared -Stage Publish
+          'candidate-ready=true' >> $env:GITHUB_OUTPUT
+      - name: Retain patched B for this native run
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: issue-1676-patched-b-${{ github.run_id }}-${{ github.run_attempt }}
+          path: prepared/transfer/
+          retention-days: 1
+          compression-level: 0
+          if-no-files-found: error
+      - name: Preserve build and test results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: issue-1676-validation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: prepared/evidence/
+          retention-days: 7
+          if-no-files-found: warn
+      - name: Keep failed validation visible
+        if: always()
+        run: |
+          if (Test-Path prepared/evidence/validation-result.json) { Get-Content prepared/evidence/validation-result.json >> $env:GITHUB_STEP_SUMMARY }
+          if ('${{ steps.validation.outcome }}' -ne 'success') { throw 'Required validation failed or was incomplete. Retained evidence must be investigated.' }
+  native:
+    needs: build
+    if: always() && github.repository == 'MertBasar0/openclaw-windows-node' && needs.build.outputs.candidate-ready == 'true'
+    runs-on: windows-2025-vs2026
+    timeout-minutes: 25
+    steps:
+      - name: Preserve reviewed bytes and isolate tools
+        run: |
+          git config --global core.autocrlf false
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot preserve source bytes.' }
+          git config --global core.eol lf
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot preserve source bytes.' }
+          "DOTNET_CLI_HOME=$(Join-Path $env:RUNNER_TEMP 'issue1676-dotnet')" >> $env:GITHUB_ENV
+          "NUGET_PACKAGES=$(Join-Path $env:RUNNER_TEMP 'issue1676-nuget')" >> $env:GITHUB_ENV
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          path: control
+          persist-credentials: false
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: '10.0.402'
+      - name: Reuse exact original A and hook
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: issue-1676-test-artifacts-41215893003-1
+          run-id: 41215893003
+          repository: MertBasar0/openclaw-windows-node
+          github-token: ${{ github.token }}
+          path: original
+      - name: Download patched B from this exact run
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: issue-1676-patched-b-${{ github.run_id }}-${{ github.run_attempt }}
+          path: patched
+      - name: Prove actual update and fresh B metadata
+        run: |
+          & ./control/.ci/issue-1676-fix/Run-Native.ps1 -ArtifactRoot ./original -PatchedArtifactRoot ./patched
+      - name: Record exact native result and limits
+        if: always()
+        run: |
+          if (Test-Path C:/OC1676Actions/public/native-result.json) { Get-Content C:/OC1676Actions/public/native-result.json >> $env:GITHUB_STEP_SUMMARY }
+          'Controlled installed update only; no live release discovery/download or Windows 11 equivalence. Existing local installations and gateways untouched. No dumps uploaded.' >> $env:GITHUB_STEP_SUMMARY
+      - name: Retain selected native evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: issue-1676-fixed-native-${{ github.run_id }}-${{ github.run_attempt }}
+          path: C:/OC1676Actions/public/
+          retention-days: 7
+          if-no-files-found: warn

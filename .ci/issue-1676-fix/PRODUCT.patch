@@ -1,0 +1,291 @@
+diff --git a/src/OpenClaw.Tray.WinUI/App.xaml.cs b/src/OpenClaw.Tray.WinUI/App.xaml.cs
+--- a/src/OpenClaw.Tray.WinUI/App.xaml.cs
++++ b/src/OpenClaw.Tray.WinUI/App.xaml.cs
+@@ -1071,6 +1071,12 @@
+             setupShownDuringStartup,
+             activation.Kind));
+         await _activationRouter.DispatchPlanAsync(launchPlan, this, CancellationToken.None);
++
++        var registrationWarning = new InnoInstallationMetadata().Refresh(
++            Environment.ProcessPath, AppVersionInfo.Version,
++            PackageHelper.IsPackaged, AppIdentity.IsDev, AppIdentity.IsIsolated);
++        if (registrationWarning is not null)
++            Logger.Warn(registrationWarning);
+ 
+         Logger.Info("Application started (WinUI 3)");
+     }
+diff --git a/src/OpenClaw.Tray.WinUI/Helpers/InnoInstallationMetadata.cs b/src/OpenClaw.Tray.WinUI/Helpers/InnoInstallationMetadata.cs
+new file mode 100644
+--- /dev/null
++++ b/src/OpenClaw.Tray.WinUI/Helpers/InnoInstallationMetadata.cs
+@@ -0,0 +1,81 @@
++using System.Runtime.Versioning;
++using System.Security;
++using Microsoft.Win32;
++
++namespace OpenClawTray.Helpers;
++
++/// <summary>
++/// Refreshes the display metadata that Inno cannot update when Updatum replaces files.
++/// The installer still owns registration creation and all uninstall behavior.
++/// </summary>
++[SupportedOSPlatform("windows")]
++internal sealed class InnoInstallationMetadata
++{
++    internal const string UninstallKey =
++        @"Software\Microsoft\Windows\CurrentVersion\Uninstall\{M0LTB0T-TRAY-4PP1-D3N7}_is1";
++
++    private const string DisplayNamePrefix = "OpenClaw Companion version ";
++    private readonly Func<RegistryKey?> _openRegistration;
++
++    // The registry opener is the OS boundary; tests use a task-owned HKCU subtree.
++    internal InnoInstallationMetadata(Func<RegistryKey?>? openRegistration = null)
++    {
++        _openRegistration = openRegistration ??
++            (() => Registry.CurrentUser.OpenSubKey(UninstallKey, writable: true));
++    }
++
++    public string? Refresh(string? executablePath, string version,
++        bool isPackaged, bool isDev, bool isIsolated)
++    {
++        if (isPackaged || isDev || isIsolated || string.IsNullOrWhiteSpace(executablePath) ||
++            string.IsNullOrWhiteSpace(version) || version == "0.0.0")
++            return null;
++
++        try
++        {
++            if (!Path.IsPathFullyQualified(executablePath) ||
++                !string.Equals(Path.GetFileName(executablePath), "OpenClaw.Tray.WinUI.exe",
++                    StringComparison.OrdinalIgnoreCase))
++                return null;
++
++            var directory = Path.GetDirectoryName(executablePath)!;
++            using var key = _openRegistration();
++            if (key is null)
++                return null; // Portable runs never create an installation record.
++
++            var location = ReadString(key, "InstallLocation");
++            var displayName = ReadString(key, "DisplayName");
++            var displayVersion = ReadString(key, "DisplayVersion");
++            if (ReadString(key, "Publisher") != "OpenClaw Foundation" ||
++                location is null ||
++                !string.Equals(location.TrimEnd('\\'), directory.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase) ||
++                !string.Equals(ReadString(key, "UninstallString"),
++                    $"\"{Path.Combine(directory, "unins000.exe")}\"", StringComparison.OrdinalIgnoreCase) ||
++                displayName is null || !displayName.StartsWith(DisplayNamePrefix, StringComparison.Ordinal) ||
++                displayVersion is null)
++                return null;
++
++            // Do not use migration admission here: it intentionally rejects the stale
++            // version this startup repair owns. Never rewrite identity or uninstall fields.
++            // Separate value writes may be interrupted; the next startup repairs either field.
++            if (displayVersion != version)
++                key.SetValue("DisplayVersion", version, RegistryValueKind.String);
++            var expectedName = DisplayNamePrefix + version;
++            if (displayName != expectedName)
++                key.SetValue("DisplayName", expectedName, RegistryValueKind.String);
++        }
++        catch (Exception error) when (error is IOException or UnauthorizedAccessException or
++                                     SecurityException or ArgumentException or NotSupportedException)
++        {
++            return $"Installed apps version could not be refreshed ({error.GetType().Name}). " +
++                   "Start Companion again or repair the installation with Setup.";
++        }
++        return null;
++    }
++
++    private static string? ReadString(RegistryKey key, string name)
++    {
++        var value = key.GetValue(name, null, RegistryValueOptions.DoNotExpandEnvironmentNames);
++        return value is string text && key.GetValueKind(name) == RegistryValueKind.String ? text : null;
++    }
++}
+diff --git a/tests/OpenClaw.Tray.Tests/OpenClaw.Tray.Tests.csproj b/tests/OpenClaw.Tray.Tests/OpenClaw.Tray.Tests.csproj
+--- a/tests/OpenClaw.Tray.Tests/OpenClaw.Tray.Tests.csproj
++++ b/tests/OpenClaw.Tray.Tests/OpenClaw.Tray.Tests.csproj
+@@ -214,6 +214,7 @@
+     <Compile Include="..\..\src\OpenClaw.Tray.WinUI\Helpers\StatusBadgeIconFactory.cs" Link="Helpers\StatusBadgeIconFactory.cs" />
+     <Compile Include="..\..\src\OpenClaw.Tray.WinUI\Helpers\Win32FilePickerHelper.cs" Link="Helpers\Win32FilePickerHelper.cs" />
+     <Compile Include="..\..\src\OpenClaw.Tray.WinUI\AppIdentity.cs" Link="AppIdentity.cs" />
++    <Compile Include="..\..\src\OpenClaw.Tray.WinUI\Helpers\InnoInstallationMetadata.cs" Link="Helpers\InnoInstallationMetadata.cs" />
+     <Compile Include="..\..\src\OpenClaw.Tray.WinUI\AppLogger.cs" Link="AppLogger.cs" />
+     <Compile Include="..\..\src\OpenClaw.Tray.WinUI\Services\TrayStateSnapshot.cs" Link="Services\TrayStateSnapshot.cs" />
+     <Compile Include="..\..\src\OpenClaw.Tray.WinUI\Services\TrayTooltipBuilder.cs" Link="Services\TrayTooltipBuilder.cs" />
+diff --git a/tests/OpenClaw.Tray.Tests/InnoInstallationMetadataTests.cs b/tests/OpenClaw.Tray.Tests/InnoInstallationMetadataTests.cs
+new file mode 100644
+--- /dev/null
++++ b/tests/OpenClaw.Tray.Tests/InnoInstallationMetadataTests.cs
+@@ -0,0 +1,162 @@
++using System.Runtime.Versioning;
++using System.Security;
++using System.Text.Json;
++using Microsoft.Win32;
++using OpenClaw.Connection.Migration;
++using OpenClawTray.Helpers;
++
++namespace OpenClaw.Tray.Tests;
++
++[SupportedOSPlatform("windows")]
++public sealed class InnoInstallationMetadataTests
++{
++    private const string Executable = @"C:\OpenClaw Test Fixture\Companion\OpenClaw.Tray.WinUI.exe";
++
++    [WindowsFact]
++    public void RunningReleaseRefreshesOnlyDisplayFieldsAndRemainsIdempotent()
++    {
++        foreach (var version in new[] { "2026.9.8-2", "2026.9.5-alpha.117", "2026.9.8-10" })
++        {
++            using var fixture = new RegistrationFixture();
++            var before = fixture.Snapshot();
++
++            Assert.Null(fixture.Owner.Refresh(Executable, version, false, false, false));
++
++            using var registration = fixture.Open();
++            Assert.Equal(version, registration.GetValue("DisplayVersion"));
++            Assert.Equal("OpenClaw Companion version " + version, registration.GetValue("DisplayName"));
++            Assert.Equal(RegistryValueKind.String, registration.GetValueKind("DisplayVersion"));
++            Assert.Equal(RegistryValueKind.String, registration.GetValueKind("DisplayName"));
++            var after = fixture.Snapshot();
++            Assert.Equal(before.Keys.Order(), after.Keys.Order());
++            foreach (var name in before.Keys.Except(["DisplayVersion", "DisplayName"]))
++                Assert.Equal(before[name], after[name]);
++
++            Assert.Null(fixture.Owner.Refresh(Executable, version, false, false, false));
++            Assert.Equal(after.OrderBy(pair => pair.Key), fixture.Snapshot().OrderBy(pair => pair.Key));
++        }
++    }
++
++    [WindowsFact]
++    public void InterruptedDisplayRefreshIsRepairedOnNextStartup()
++    {
++        foreach (var changedField in new[] { "DisplayVersion", "DisplayName" })
++        {
++            using var fixture = new RegistrationFixture();
++            using (var registration = fixture.Open())
++                registration.SetValue(changedField, changedField == "DisplayVersion"
++                    ? "2026.9.8-2" : "OpenClaw Companion version 2026.9.8-2");
++
++            Assert.Null(fixture.Owner.Refresh(Executable, "2026.9.8-2", false, false, false));
++            using var after = fixture.Open();
++            Assert.Equal("2026.9.8-2", after.GetValue("DisplayVersion"));
++            Assert.Equal("OpenClaw Companion version 2026.9.8-2", after.GetValue("DisplayName"));
++        }
++    }
++
++    [WindowsFact]
++    public void ForeignOrMalformedRegistrationRemainsUnchanged()
++    {
++        foreach (var field in new[] { "InstallLocation", "Publisher", "UninstallString", "DisplayName", "DisplayVersion" })
++        {
++            using var fixture = new RegistrationFixture();
++            using (var registration = fixture.Open())
++            {
++                if (field == "DisplayVersion")
++                    registration.SetValue(field, 42, RegistryValueKind.DWord);
++                else
++                    registration.SetValue(field, "different installation", RegistryValueKind.String);
++            }
++            var before = fixture.Snapshot();
++            Assert.Null(fixture.Owner.Refresh(Executable, "2026.9.8-2", false, false, false));
++            Assert.Equal(before.OrderBy(pair => pair.Key), fixture.Snapshot().OrderBy(pair => pair.Key));
++        }
++    }
++
++    [WindowsFact]
++    public void PortableCopyCannotRefreshAnotherInstalledCopy()
++    {
++        using var fixture = new RegistrationFixture();
++        var before = fixture.Snapshot();
++        Assert.Null(fixture.Owner.Refresh(@"C:\Portable\OpenClaw.Tray.WinUI.exe", "2026.9.8-2", false, false, false));
++        Assert.Equal(before.OrderBy(pair => pair.Key), fixture.Snapshot().OrderBy(pair => pair.Key));
++    }
++
++    [Fact]
++    public void PackagedDevAndIsolatedProcessesNeverOpenRegistration()
++    {
++        var owner = new InnoInstallationMetadata(() => throw new InvalidOperationException("Registry must not be opened"));
++        Assert.Null(owner.Refresh(Executable, "2026.9.8-2", true, false, false));
++        Assert.Null(owner.Refresh(Executable, "2026.9.8-2", false, true, false));
++        Assert.Null(owner.Refresh(Executable, "2026.9.8-2", false, false, true));
++    }
++
++    [WindowsFact]
++    public void MissingRegistrationIsNotCreated()
++    {
++        var owner = new InnoInstallationMetadata(() => null);
++        Assert.Null(owner.Refresh(Executable, "2026.9.8-2", false, false, false));
++    }
++
++    [WindowsFact]
++    public void RegistryFailureReturnsRecoveryWarningWithoutBlockingStartup()
++    {
++        foreach (var failure in new Exception[]
++        {
++            new UnauthorizedAccessException(), new SecurityException(), new IOException()
++        })
++        {
++            var owner = new InnoInstallationMetadata(() => throw failure);
++            var warning = owner.Refresh(Executable, "2026.9.8-2", false, false, false);
++            Assert.NotNull(warning);
++            Assert.Contains(failure.GetType().Name, warning);
++            Assert.Contains("repair the installation with Setup", warning);
++        }
++    }
++
++    [Fact]
++    public void StartupRefreshFollowsAdmissionAndCompletesBeforeStartupMarker()
++    {
++        var source = File.ReadAllText(Path.Combine(TestRepositoryPaths.GetRepositoryRoot(),
++            "src", "OpenClaw.Tray.WinUI", "App.xaml.cs"));
++        var launch = source[source.IndexOf("private async Task OnLaunchedAsync", StringComparison.Ordinal)..];
++        var refresh = launch.IndexOf("new InnoInstallationMetadata().Refresh(", StringComparison.Ordinal);
++        Assert.True(refresh > launch.IndexOf("InnoMigrationStartupGuard.ShouldStopLaunch", StringComparison.Ordinal));
++        Assert.True(refresh > launch.IndexOf("ForwardLaunchToPrimaryAsync", StringComparison.Ordinal));
++        Assert.True(refresh > launch.IndexOf("await _activationRouter.DispatchPlanAsync", StringComparison.Ordinal));
++        Assert.True(refresh < launch.IndexOf("Logger.Info(\"Application started (WinUI 3)\")", StringComparison.Ordinal));
++        Assert.Equal(InnoInstallationDetector.UninstallKey, InnoInstallationMetadata.UninstallKey);
++    }
++
++    private sealed class RegistrationFixture : IDisposable
++    {
++        private readonly string _path = @"Software\OpenClaw.Tests\Issue1676-" + Guid.NewGuid().ToString("N");
++        public InnoInstallationMetadata Owner => new(() => Open());
++
++        public RegistrationFixture()
++        {
++            using var key = Registry.CurrentUser.CreateSubKey(_path);
++            key.SetValue("InstallLocation", @"C:\OpenClaw Test Fixture\Companion\");
++            key.SetValue("Publisher", "OpenClaw Foundation");
++            key.SetValue("UninstallString", @"""C:\OpenClaw Test Fixture\Companion\unins000.exe""");
++            key.SetValue("DisplayName", "OpenClaw Companion version 2026.9.5-alpha.93");
++            key.SetValue("DisplayVersion", "2026.9.5-alpha.93");
++            key.SetValue("InstallDate", "20261003");
++            key.SetValue("MajorVersion", 2026, RegistryValueKind.DWord);
++            key.SetValue("QuietUninstallString", @"""C:\OpenClaw Test Fixture\Companion\unins000.exe"" /SILENT");
++            key.SetValue("UnknownValue", new byte[] { 3, 1, 4 }, RegistryValueKind.Binary);
++        }
++
++        public RegistryKey Open() => Registry.CurrentUser.OpenSubKey(_path, writable: true)!;
++
++        public Dictionary<string, (RegistryValueKind Kind, string Value)> Snapshot()
++        {
++            using var key = Open();
++            return key.GetValueNames().ToDictionary(name => name, name =>
++                (key.GetValueKind(name), JsonSerializer.Serialize(key.GetValue(name, null,
++                    RegistryValueOptions.DoNotExpandEnvironmentNames))));
++        }
++
++        public void Dispose() => Registry.CurrentUser.DeleteSubKeyTree(_path);
++    }
++}
+diff --git a/docs/ARCHITECTURE.md b/docs/ARCHITECTURE.md
+--- a/docs/ARCHITECTURE.md
++++ b/docs/ARCHITECTURE.md
+@@ -132,6 +132,7 @@
+ | Raw MXC EXE/Win32-pipe transport, generic JSON policy DTOs and failure-triggered host fallback | Retired. SDK/load/request failures never select host execution | closed |
+ | Positively unsupported Windows command compatibility | `MxcAvailability` supplies the positive OS verdict; `MxcCommandRunner` admits `UnsupportedWindowsCommandExecutor` with approved argv, revalidation, deadline and bounded process ownership | authoritative |
+ | Obsolete npm MXC payload cleanup on unpackaged startup | `LegacyMxcFiles` deletes only four historically shipped files, refuses reparse traversal and preserves unknown files and OS-managed package versions; `App` only delegates after primary-instance admission | authoritative |
++| Existing Inno Installed apps display metadata after ZIP updates | `InnoInstallationMetadata` refreshes only `DisplayVersion`/`DisplayName` for the running same-user production installation; Inno retains registration creation, installation date and uninstall ownership. `App` delegates synchronously after admitted startup and before its completion marker | authoritative |
+ | Cooperating JSON persistence coordination | `PersistenceFileLease`; registry expected-snapshot Save and settings loaded-JSON CAS hold it through atomic replacement | authoritative |
+ | Settings persistence conflict state and visible recovery | `SettingsManager` owns typed CAS rejection; `SettingsPersistenceNotification` owns dispatched, deduplicated restart guidance; App composes/disposes it | authoritative |
+ | V2 exec-approvals snapshot/CAS persistence + observation | `ExecApprovalsStore` through `IExecApprovalsPresentationStore` | authoritative |
