@@ -1,0 +1,48 @@
+{
+  "base": "ef1df54dfe95a8b0a2ae8033425561136d8a70ef",
+  "upstreamChecked": "a4dd026cc5f85a444a0fcd05eef5b86282dbda8c",
+  "files": {
+    "src/OpenClaw.Shared/OpenClawReleaseVersion.cs": {
+      "baseSha256": "7c3f6387d99c4c28f36e4381617377e3d8f768a78d1faeb84701c9afb0b9b4e0",
+      "candidateSha256": "73d483d0a32597688f0f76358a374793b6fdf8a8acfb553f3df71083e674e8d2"
+    },
+    "src/OpenClaw.Tray.WinUI/Services/UpdateCheckPipeline.cs": {
+      "baseSha256": "090e2a3d5446520fa80572692403af8795bc5a4db359767b3db5a5ebb6a8694d",
+      "candidateSha256": "de0b06ef3e64b98cab9b0e483fed08364cac767633ff70300fd9ef4973621588"
+    },
+    "src/OpenClaw.Tray.WinUI/Services/UpdatumUpdateBackend.cs": {
+      "baseSha256": "9a0799fc86faaa90198f011e701de66675240aff64466247c9b7adf0c2386b1d",
+      "candidateSha256": "76ec48b9996a38bfab105c3ddc227a3bdb78d8017cc0468c4a60831fe8206079"
+    },
+    "src/OpenClaw.Tray.WinUI/Services/UpdateCoordinator.cs": {
+      "baseSha256": "76726e5360070d12b71d6a343aea35b519bbfb5ff1543879dcc3c7a8eeadf8d2",
+      "candidateSha256": "8fec9fdd24947c7f0b3c7a2f17ea54c741b00f17ae52289dbe924155728973ad"
+    },
+    "docs/ARCHITECTURE.md": {
+      "baseSha256": "06b1147866fa0243e3a3070a7ecfcde9c0cf75a755912c5a3babc6f3b308e4e7",
+      "candidateSha256": "de288fb30e636c06a5e850987390087ae3e4376844023f64985382246c3aa2d8"
+    },
+    "tests/OpenClaw.Tray.Tests/Fixtures/issue1642-feed.json": {
+      "candidateSha256": "52ba2f27cdc3abbfdd2dcf1b4a7e6fc90cb55975b89c1a9011ab295e0408378b",
+      "unchangedFromBaselineTestPatch": true
+    },
+    "tests/OpenClaw.Tray.Tests/Fixtures/issue1642.json": {
+      "candidateSha256": "a76f77835f7708b19b8565cb8ad02c5a279ae8bfed6f2ffcd8719046fb1d7da6",
+      "unchangedFromBaselineTestPatch": true
+    },
+    "tests/OpenClaw.Tray.Tests/Issue1642SelectionTests.cs": {
+      "candidateSha256": "4decdb9c3f7d7046324dec3ca98880bb0a73eb5791bba2de206f9ee08efc9b2c",
+      "unchangedFromBaselineTestPatch": true
+    },
+    "tests/OpenClaw.Tray.Tests/Issue1642TransportTests.cs": {
+      "candidateSha256": "15087b337c90d5e5d2d038ba8d1799be6079c8799931fda59b25b8d5d5ebb1c3",
+      "unchangedFromBaselineTestPatch": true
+    }
+  },
+  "patches": {
+    "product.patch": "3e8b435bcee07b7c3eb6f7630aa5d88dbb8067ce69c0a9b7f64b7d0948aea5cc",
+    "test-only.patch": "70f7bfb6e279d3c3e150ba57653b228a88c120605a1a430a75bf35e2bad60847",
+    "candidate.patch": "b7af368732969278f35ae670c089968e8940f601b6c69433b6ac6f1b1d384186"
+  },
+  "runtime": "NOT EXECUTED locally; hosted CI pending"
+}
