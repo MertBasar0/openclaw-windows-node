@@ -1,0 +1,30 @@
+{
+  "UpdatumVersion": "1.3.4",
+  "UpdatumSourceCommit": "b052f3878414f21e6500c3fd79182bfde43341ec",
+  "NuGetRepositoryCommitMatchesTag": true,
+  "OctokitVersion": "14.0.0",
+  "OctokitSourceCommit": "7fa5b0fe4a18c9b981b21290c3ca9320b2d6415b",
+  "SourceHead": "a4dd026cc5f85a444a0fcd05eef5b86282dbda8c",
+  "Packages": [
+    {
+      "File": "updatum.1.3.4.nupkg",
+      "Sha256": "f24fc501cd3635f188bbb6d5ef68feea0a534eaa6b0c0467093f3eb53149f85e"
+    },
+    {
+      "File": "octokit.14.0.0.nupkg",
+      "Sha256": "a53488ed3cf954577861dc7595a13e56465f86c97b45b830e363c1aa1c95bf22"
+    }
+  ],
+  "Assemblies": [
+    {
+      "Name": "Updatum",
+      "RelativePath": "updatum.1.3.4/lib/net10.0/Updatum.dll",
+      "Sha256": "a4ad594da45acd052396854eae028d12a1c747657ca0e91b2582c44f0c2babe0"
+    },
+    {
+      "Name": "Octokit",
+      "RelativePath": "octokit.14.0.0/lib/netstandard2.0/Octokit.dll",
+      "Sha256": "6a48642d6ae464b43a6cb50292618af6c73ada8d726644e50d4fa44a1783f638"
+    }
+  ]
+}

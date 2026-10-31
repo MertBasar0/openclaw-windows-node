@@ -1,0 +1,5 @@
+{
+  "native/StartupHook.cs": "af5dd95aa554026658e1c11b8eb5126641cf4c3b71eb0158c4f7f46b9a91a9bd",
+  "native/Issue1676.StartupHook.csproj": "914dfecf7ff62ea0f093968986ce42ea8e9fdf80914060b9f6cb74b9fc8f1be8",
+  "dependency-contract.json": "565845504c30038ca626e7e371f45c59f25ab07bebef18eb12bf764d7a2eab73"
+}
