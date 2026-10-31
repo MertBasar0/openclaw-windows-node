@@ -1,0 +1,938 @@
+diff --git a/tests/OpenClaw.Tray.Tests/Issue1642SelectionTests.cs b/tests/OpenClaw.Tray.Tests/Issue1642SelectionTests.cs
+new file mode 100644
+index 0000000..ec86c45
+--- /dev/null
++++ b/tests/OpenClaw.Tray.Tests/Issue1642SelectionTests.cs
+@@ -0,0 +1,145 @@
++using System.Text.Json;
++using OpenClaw.Shared;
++using OpenClaw.TestSupport;
++using OpenClawTray.Services;
++
++namespace OpenClaw.Tray.Tests;
++
++// Environment is process-global. The existing collection excludes parallel readers.
++[Collection(OpenClawTrayDataDirEnvironmentCollection.Name)]
++public sealed class Issue1642SelectionTests
++{
++    public static IEnumerable<object[]> Cases() => Issue1642Fixtures.Load().Cases
++        .Select(item => new object[] { item.Name });
++
++    [Theory]
++    [MemberData(nameof(Cases))]
++    public async Task PipelineOnly_DesiredSelection(string name)
++    {
++        var input = Issue1642Fixtures.Load().Cases.Single(item => item.Name == name);
++        using var environment = new EnvironmentScope("OPENCLAW_UPDATE_CHANNEL", input.Channel);
++        var boundary = new RecordedReleaseBoundary(input);
++
++        // This is the REAL production selector, not a copied version comparator.
++        // At the pinned base this owner has NO channel input and ignores the env var.
++        // These are desired-contract probes, NOT caller/backend opt-in proof.
++        var outcome = await UpdateCheckPipeline.CheckAsync(boundary, input.Current);
++
++        Assert.Equal(input.ExpectedSelectedTag is not null, outcome.UpdateFound);
++        Assert.Equal(input.ExpectedSelectedTag, outcome.SelectedRelease?.TagName);
++        if (input.ExpectedSelectedTag is null)
++        {
++            Assert.Empty(boundary.Activated);
++            return;
++        }
++
++        var expected = boundary.Candidates.Single(item => item.TagName == input.ExpectedSelectedTag);
++        Assert.Same(expected, outcome.SelectedRelease);
++        if (input.BackendFound && input.BackendSelectedTag == input.ExpectedSelectedTag)
++        {
++            Assert.Empty(boundary.Activated);
++        }
++        else
++        {
++            Assert.Equal(input.ExpectedSelectedTag, outcome.ActivatedFallbackTag);
++            Assert.Equal(new[] { input.ExpectedSelectedTag }, boundary.Activated);
++            Assert.Equal(input.Releases.Single(item => item.Tag == input.ExpectedSelectedTag).Asset.Id,
++                boundary.ActivatedAssetId);
++        }
++        if (input.ExpectedClassification is { } classification)
++            Assert.Equal(classification, UpdateReleasePolicy.Classify(outcome.SelectedRelease).ToString());
++        if (input.ExpectedSuppressed is { } suppressed)
++        {
++            Assert.Equal(suppressed, CompanionUpdateSuppressionPolicy.ShouldSuppress(
++                new GatewayUpdateStatus { EffectiveChannel = input.GatewayChannel }, outcome));
++        }
++    }
++
++    [Fact]
++    public async Task Stable_BackendSuccessRetainsFastPath()
++    {
++        using var environment = new EnvironmentScope("OPENCLAW_UPDATE_CHANNEL", "stable");
++        var selected = new UpdateReleaseCandidate("v2026.9.8-1", "ordinary", true,
++            false, false, true, () => true, () => throw new InvalidOperationException("Already selected"));
++        var boundary = new StableBoundary(selected);
++        var outcome = await UpdateCheckPipeline.CheckAsync(boundary, "2026.9.5");
++        Assert.True(outcome.UpdateFound);
++        Assert.Same(selected, outcome.SelectedRelease);
++        Assert.Null(outcome.ActivatedFallbackTag);
++    }
++
++    private sealed class StableBoundary(UpdateReleaseCandidate selected) : IUpdateCheckBoundary
++    {
++        public Task<bool> CheckForUpdatesAsync() => Task.FromResult(true);
++        public UpdateReleaseCandidate GetSelectedRelease() => selected;
++        public IEnumerable<UpdateReleaseCandidate> GetReleaseCandidates() =>
++            throw new InvalidOperationException("Stable backend success must not enumerate fallback candidates.");
++    }
++
++    private sealed class RecordedReleaseBoundary : IUpdateCheckBoundary
++    {
++        private readonly Issue1642Case _input;
++        public UpdateReleaseCandidate[] Candidates { get; }
++        public List<string> Activated { get; } = [];
++        public string? ActivatedAssetId { get; private set; }
++
++        public RecordedReleaseBoundary(Issue1642Case input)
++        {
++            _input = input;
++            // Map external metadata only. No sorting, version comparison or eligibility logic.
++            Candidates = input.Releases.Select(release => new UpdateReleaseCandidate(
++                release.Tag, release.Body, release.TrustedMetadata, release.Draft,
++                release.Prerelease, release.Published, () => release.Asset.Compatible,
++                () => { Activated.Add(release.Tag); ActivatedAssetId = release.Asset.Id; })).ToArray();
++        }
++
++        public Task<bool> CheckForUpdatesAsync() => Task.FromResult(_input.BackendFound);
++        public UpdateReleaseCandidate? GetSelectedRelease() => Candidates.SingleOrDefault(
++            release => release.TagName == _input.BackendSelectedTag);
++        public IEnumerable<UpdateReleaseCandidate> GetReleaseCandidates() => Candidates;
++    }
++}
++
++internal static class Issue1642Fixtures
++{
++    public static Issue1642Corpus Load() => JsonSerializer.Deserialize<Issue1642Corpus>(
++        File.ReadAllText(Path.Combine(TestRepositoryPaths.GetRepositoryRoot(), "tests",
++            "OpenClaw.Tray.Tests", "Fixtures", "issue1642.json")),
++        new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
++        ?? throw new InvalidDataException("Missing #1642 corpus");
++}
++
++public sealed class Issue1642Corpus
++{
++    public Issue1642Case[] Cases { get; init; } = [];
++}
++public sealed class Issue1642Case
++{
++    public string Name { get; init; } = "";
++    public string Current { get; init; } = "";
++    public string? Channel { get; init; }
++    public Issue1642Release[] Releases { get; init; } = [];
++    public string? ExpectedSelectedTag { get; init; }
++    public bool BackendFound { get; init; }
++    public string? BackendSelectedTag { get; init; }
++    public string? GatewayChannel { get; init; }
++    public bool? ExpectedSuppressed { get; init; }
++    public string? ExpectedClassification { get; init; }
++}
++public sealed class Issue1642Release
++{
++    public string Tag { get; init; } = "";
++    public string Body { get; init; } = "";
++    public bool Prerelease { get; init; }
++    public bool Draft { get; init; }
++    public bool Published { get; init; }
++    public bool TrustedMetadata { get; init; }
++    public Issue1642Asset Asset { get; init; } = new();
++}
++public sealed class Issue1642Asset
++{
++    public string Id { get; init; } = "";
++    public string Name { get; init; } = "";
++    public bool Compatible { get; init; }
++    public string Url { get; init; } = "";
++}
+diff --git a/tests/OpenClaw.Tray.Tests/Issue1642TransportTests.cs b/tests/OpenClaw.Tray.Tests/Issue1642TransportTests.cs
+new file mode 100644
+index 0000000..3ecd5ae
+--- /dev/null
++++ b/tests/OpenClaw.Tray.Tests/Issue1642TransportTests.cs
+@@ -0,0 +1,91 @@
++using System.Net;
++using System.Net.Http;
++using System.Text;
++using System.Text.Json;
++
++namespace OpenClaw.Tray.Tests;
++
++// Transport component only. The pinned Updatum client cannot accept this handler
++// through an exposed application boundary. See TRANSPORT-GAP.md in the kit.
++internal sealed class Issue1642PinnedReleaseHandler(string latestJson, string releasesJson)
++    : HttpMessageHandler
++{
++    internal const string Root = "https://api.github.com/repos/openclaw/openclaw-windows-node/releases";
++    public List<string> Requests { get; } = [];
++
++    protected override Task<HttpResponseMessage> SendAsync(
++        HttpRequestMessage request, CancellationToken cancellationToken)
++    {
++        cancellationToken.ThrowIfCancellationRequested();
++        var uri = request.RequestUri?.AbsoluteUri;
++        if (request.Method != HttpMethod.Get || request.Headers.Authorization is not null ||
++            request.Headers.Contains("Cookie"))
++            throw new InvalidOperationException("Fixture permits credential-free metadata GET only.");
++
++        // Exact allowlist. No socket, proxy, default handler, redirect or live fallback.
++        var body = uri switch
++        {
++            Root + "/latest" => latestJson,
++            Root => releasesJson,
++            _ => throw new InvalidOperationException("Unpinned request blocked: " + uri)
++        };
++        Requests.Add(uri!);
++        return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
++        {
++            Content = new StringContent(body, Encoding.UTF8, "application/json"),
++            RequestMessage = request
++        });
++    }
++}
++
++public sealed class Issue1642TransportTests
++{
++    private static Issue1642PinnedReleaseHandler CreateHandler()
++    {
++        using var feed = JsonDocument.Parse(File.ReadAllText(Path.Combine(
++            TestRepositoryPaths.GetRepositoryRoot(), "tests", "OpenClaw.Tray.Tests",
++            "Fixtures", "issue1642-feed.json")));
++        return new Issue1642PinnedReleaseHandler(
++            feed.RootElement.GetProperty("latest").GetRawText(),
++            feed.RootElement.GetProperty("releases").GetRawText());
++    }
++
++    [Fact]
++    public async Task MetadataRequestsReturnPinnedUnsortedInputWithoutSelection()
++    {
++        using var handler = CreateHandler();
++        using var client = new HttpClient(handler);
++        using var latest = JsonDocument.Parse(await client.GetStringAsync(Issue1642PinnedReleaseHandler.Root + "/latest"));
++        Assert.Equal("v2026.9.4", latest.RootElement.GetProperty("tag_name").GetString());
++        using var releases = JsonDocument.Parse(await client.GetStringAsync(Issue1642PinnedReleaseHandler.Root));
++        Assert.Equal(new[] { "v2026.9.5-alpha.10", "v2026.9.5-alpha.117", "v2026.9.5-alpha.97", "v2026.9.4" },
++            releases.RootElement.EnumerateArray().Select(item => item.GetProperty("tag_name").GetString()).ToArray());
++        Assert.Equal(new[] { Issue1642PinnedReleaseHandler.Root + "/latest", Issue1642PinnedReleaseHandler.Root }, handler.Requests);
++    }
++
++    [Theory]
++    [InlineData("https://example.invalid/no-download")]
++    [InlineData("https://api.github.com/repos/openclaw/openclaw-windows-node/releases/123/assets")]
++    [InlineData("https://github.com/openclaw/openclaw-windows-node/releases/download/v1/app.exe")]
++    [InlineData("https://api.github.com/repos/openclaw/openclaw-windows-node/releases?page=2")]
++    public async Task UnpinnedRequestsCannotFallThroughToNetwork(string uri)
++    {
++        using var handler = CreateHandler();
++        using var client = new HttpClient(handler);
++        await Assert.ThrowsAsync<InvalidOperationException>(() => client.GetAsync(uri));
++        Assert.Empty(handler.Requests);
++    }
++
++    [Fact]
++    public async Task CredentialsAndWritesAreRejected()
++    {
++        using var handler = CreateHandler();
++        using var client = new HttpClient(handler);
++        using var credentialed = new HttpRequestMessage(HttpMethod.Get, Issue1642PinnedReleaseHandler.Root);
++        credentialed.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", "synthetic-fixture-only");
++        await Assert.ThrowsAsync<InvalidOperationException>(() => client.SendAsync(credentialed));
++        using var write = new HttpRequestMessage(HttpMethod.Post, Issue1642PinnedReleaseHandler.Root);
++        await Assert.ThrowsAsync<InvalidOperationException>(() => client.SendAsync(write));
++        Assert.Empty(handler.Requests);
++    }
++}
+diff --git a/tests/OpenClaw.Tray.Tests/Fixtures/issue1642.json b/tests/OpenClaw.Tray.Tests/Fixtures/issue1642.json
+new file mode 100644
+index 0000000..d841dc0
+--- /dev/null
++++ b/tests/OpenClaw.Tray.Tests/Fixtures/issue1642.json
+@@ -0,0 +1,557 @@
++{
++  "status": "planned-not-executed",
++  "notes": [
++    "Fixtures are independent desired outcomes, not an executable selector.",
++    "Map metadata into real owner tests; separately prove env opt-in forwarding.",
++    "Compatible booleans are pipeline seam inputs; backend tests must validate actual architecture asset matching.",
++    "All asset URLs are deliberately non-downloadable.",
++    "Preserve stable backend-success fast path and Store/Dev/Debug skips with existing tests.",
++    "Check unknown/empty/mixed-case channel semantics against existing opt-in contract before implementation."
++  ],
++  "cases": [
++    {
++      "name": "same-series-93-97",
++      "current": "2026.9.5-alpha.93",
++      "channel": "alpha",
++      "releases": [
++        {
++          "tag": "v2026.9.5-alpha.97",
++          "prerelease": true,
++          "draft": false,
++          "published": true,
++          "trustedMetadata": true,
++          "body": "<!-- openclaw-update: ordinary -->",
++          "asset": {
++            "id": "v2026.9.5-alpha.97-x64",
++            "name": "OpenClawTray-2026.9.5-alpha.97-win-x64.zip",
++            "compatible": true,
++            "url": "https://example.invalid/no-download"
++          }
++        }
++      ],
++      "expectedSelectedTag": "v2026.9.5-alpha.97"
++    },
++    {
++      "name": "numeric-9-10",
++      "current": "2026.9.5-alpha.9",
++      "channel": "alpha",
++      "releases": [
++        {
++          "tag": "v2026.9.5-alpha.10",
++          "prerelease": true,
++          "draft": false,
++          "published": true,
++          "trustedMetadata": true,
++          "body": "<!-- openclaw-update: ordinary -->",
++          "asset": {
++            "id": "v2026.9.5-alpha.10-x64",
++            "name": "OpenClawTray-2026.9.5-alpha.10-win-x64.zip",
++            "compatible": true,
++            "url": "https://example.invalid/no-download"
++          }
++        }
++      ],
++      "expectedSelectedTag": "v2026.9.5-alpha.10"
++    },
++    {
++      "name": "cross-base",
++      "current": "2026.9.5-alpha.117",
++      "channel": "alpha",
++      "releases": [
++        {
++          "tag": "v2026.9.8-alpha.1",
++          "prerelease": true,
++          "draft": false,
++          "published": true,
++          "trustedMetadata": true,
++          "body": "<!-- openclaw-update: ordinary -->",
++          "asset": {
++            "id": "v2026.9.8-alpha.1-x64",
++            "name": "OpenClawTray-2026.9.8-alpha.1-win-x64.zip",
++            "compatible": true,
++            "url": "https://example.invalid/no-download"
++          }
++        }
++      ],
++      "expectedSelectedTag": "v2026.9.8-alpha.1"
++    },
++    {
++      "name": "unsorted-choose-greatest",
++      "current": "2026.9.5-alpha.9",
++      "channel": "alpha",
++      "releases": [
++        {
++          "tag": "v2026.9.5-alpha.10",
++          "prerelease": true,
++          "draft": false,
++          "published": true,
++          "trustedMetadata": true,
++          "body": "<!-- openclaw-update: ordinary -->",
++          "asset": {
++            "id": "v2026.9.5-alpha.10-x64",
++            "name": "OpenClawTray-2026.9.5-alpha.10-win-x64.zip",
++            "compatible": true,
++            "url": "https://example.invalid/no-download"
++          }
++        },
++        {
++          "tag": "v2026.9.5-alpha.117",
++          "prerelease": true,
++          "draft": false,
++          "published": true,
++          "trustedMetadata": true,
++          "body": "<!-- openclaw-update: ordinary -->",
++          "asset": {
++            "id": "v2026.9.5-alpha.117-x64",
++            "name": "OpenClawTray-2026.9.5-alpha.117-win-x64.zip",
++            "compatible": true,
++            "url": "https://example.invalid/no-download"
++          }
++        },
++        {
++          "tag": "v2026.9.5-alpha.97",
++          "prerelease": true,
++          "draft": false,
++          "published": true,
++          "trustedMetadata": true,
++          "body": "<!-- openclaw-update: ordinary -->",
++          "asset": {
++            "id": "v2026.9.5-alpha.97-x64",
++            "name": "OpenClawTray-2026.9.5-alpha.97-win-x64.zip",
++            "compatible": true,
++            "url": "https://example.invalid/no-download"
++          }
++        }
++      ],
++      "expectedSelectedTag": "v2026.9.5-alpha.117"
++    },
++    {
++      "name": "incompatible-highest",
++      "current": "2026.9.5-alpha.9",
++      "channel": "alpha",
++      "releases": [
++        {
++          "tag": "v2026.9.5-alpha.117",
++          "prerelease": true,
++          "draft": false,
++          "published": true,
++          "trustedMetadata": true,
++          "body": "<!-- openclaw-update: ordinary -->",
++          "asset": {
++            "id": "arm-only",
++            "name": "OpenClawTray-2026.9.5-alpha.117-win-arm64.zip",
++            "compatible": false,
++            "url": "https://example.invalid/no-download"
++          }
++        },
++        {
++          "tag": "v2026.9.5-alpha.97",
++          "prerelease": true,
++          "draft": false,
++          "published": true,
++          "trustedMetadata": true,
++          "body": "<!-- openclaw-update: ordinary -->",
++          "asset": {
++            "id": "v2026.9.5-alpha.97-x64",
++            "name": "OpenClawTray-2026.9.5-alpha.97-win-x64.zip",
++            "compatible": true,
++            "url": "https://example.invalid/no-download"
++          }
++        }
++      ],
++      "expectedSelectedTag": "v2026.9.5-alpha.97"
++    },
++    {
++      "name": "lower-vendor-stable-must-not-short-circuit",
++      "current": "2026.9.5-alpha.97",
++      "channel": "alpha",
++      "releases": [
++        {
++          "tag": "v2026.9.8-1",
++          "prerelease": false,
++          "draft": false,
++          "published": true,
++          "trustedMetadata": true,
++          "body": "<!-- openclaw-update: ordinary -->",
++          "asset": {
++            "id": "v2026.9.8-1-x64",
++            "name": "OpenClawTray-2026.9.8-1-win-x64.zip",
++            "compatible": true,
++            "url": "https://example.invalid/no-download"
++          }
++        },
++        {
++          "tag": "v2026.9.9-alpha.2",
++          "prerelease": true,
++          "draft": false,
++          "published": true,
++          "trustedMetadata": true,
++          "body": "<!-- openclaw-update: ordinary -->",
++          "asset": {
++            "id": "v2026.9.9-alpha.2-x64",
++            "name": "OpenClawTray-2026.9.9-alpha.2-win-x64.zip",
++            "compatible": true,
++            "url": "https://example.invalid/no-download"
++          }
++        }
++      ],
++      "expectedSelectedTag": "v2026.9.9-alpha.2",
++      "backendFound": true,
++      "backendSelectedTag": "v2026.9.8-1"
++    },
++    {
++      "name": "final-after-same-base-alpha",
++      "current": "2026.9.5-alpha.117",
++      "channel": "alpha",
++      "releases": [
++        {
++          "tag": "v2026.9.5",
++          "prerelease": false,
++          "draft": false,
++          "published": true,
++          "trustedMetadata": true,
++          "body": "<!-- openclaw-update: ordinary -->",
++          "asset": {
++            "id": "v2026.9.5-x64",
++            "name": "OpenClawTray-2026.9.5-win-x64.zip",
++            "compatible": true,
++            "url": "https://example.invalid/no-download"
++          }
++        }
++      ],
++      "expectedSelectedTag": "v2026.9.5"
++    },
++    {
++      "name": "stable-correction-numeric",
++      "current": "2026.9.5-9",
++      "channel": "stable",
++      "releases": [
++        {
++          "tag": "v2026.9.5-10",
++          "prerelease": false,
++          "draft": false,
++          "published": true,
++          "trustedMetadata": true,
++          "body": "<!-- openclaw-update: ordinary -->",
++          "asset": {
++            "id": "v2026.9.5-10-x64",
++            "name": "OpenClawTray-2026.9.5-10-win-x64.zip",
++            "compatible": true,
++            "url": "https://example.invalid/no-download"
++          }
++        }
++      ],
++      "expectedSelectedTag": "v2026.9.5-10"
++    },
++    {
++      "name": "stable-excludes-alpha",
++      "current": "2026.9.5",
++      "channel": "stable",
++      "releases": [
++        {
++          "tag": "v2026.9.8-alpha.1",
++          "prerelease": true,
++          "draft": false,
++          "published": true,
++          "trustedMetadata": true,
++          "body": "<!-- openclaw-update: ordinary -->",
++          "asset": {
++            "id": "v2026.9.8-alpha.1-x64",
++            "name": "OpenClawTray-2026.9.8-alpha.1-win-x64.zip",
++            "compatible": true,
++            "url": "https://example.invalid/no-download"
++          }
++        }
++      ],
++      "expectedSelectedTag": null
++    },
++    {
++      "name": "unset-excludes-alpha",
++      "current": "2026.9.5",
++      "channel": null,
++      "releases": [
++        {
++          "tag": "v2026.9.8-alpha.1",
++          "prerelease": true,
++          "draft": false,
++          "published": true,
++          "trustedMetadata": true,
++          "body": "<!-- openclaw-update: ordinary -->",
++          "asset": {
++            "id": "v2026.9.8-alpha.1-x64",
++            "name": "OpenClawTray-2026.9.8-alpha.1-win-x64.zip",
++            "compatible": true,
++            "url": "https://example.invalid/no-download"
++          }
++        }
++      ],
++      "expectedSelectedTag": null
++    },
++    {
++      "name": "unsupported-channel-does-not-opt-in",
++      "current": "2026.9.5",
++      "channel": "canary",
++      "releases": [
++        {
++          "tag": "v2026.9.8-alpha.1",
++          "prerelease": true,
++          "draft": false,
++          "published": true,
++          "trustedMetadata": true,
++          "body": "<!-- openclaw-update: ordinary -->",
++          "asset": {
++            "id": "v2026.9.8-alpha.1-x64",
++            "name": "OpenClawTray-2026.9.8-alpha.1-win-x64.zip",
++            "compatible": true,
++            "url": "https://example.invalid/no-download"
++          }
++        }
++      ],
++      "expectedSelectedTag": null
++    },
++    {
++      "name": "equal-or-older-alpha-reject",
++      "current": "2026.9.5-alpha.97",
++      "channel": "alpha",
++      "releases": [
++        {
++          "tag": "v2026.9.5-alpha.97",
++          "prerelease": true,
++          "draft": false,
++          "published": true,
++          "trustedMetadata": true,
++          "body": "<!-- openclaw-update: ordinary -->",
++          "asset": {
++            "id": "v2026.9.5-alpha.97-x64",
++            "name": "OpenClawTray-2026.9.5-alpha.97-win-x64.zip",
++            "compatible": true,
++            "url": "https://example.invalid/no-download"
++          }
++        },
++        {
++          "tag": "v2026.9.5-alpha.93",
++          "prerelease": true,
++          "draft": false,
++          "published": true,
++          "trustedMetadata": true,
++          "body": "<!-- openclaw-update: ordinary -->",
++          "asset": {
++            "id": "v2026.9.5-alpha.93-x64",
++            "name": "OpenClawTray-2026.9.5-alpha.93-win-x64.zip",
++            "compatible": true,
++            "url": "https://example.invalid/no-download"
++          }
++        }
++      ],
++      "expectedSelectedTag": null
++    },
++    {
++      "name": "alpha-before-same-base-final",
++      "current": "2026.9.5",
++      "channel": "alpha",
++      "releases": [
++        {
++          "tag": "v2026.9.5-alpha.117",
++          "prerelease": true,
++          "draft": false,
++          "published": true,
++          "trustedMetadata": true,
++          "body": "<!-- openclaw-update: ordinary -->",
++          "asset": {
++            "id": "v2026.9.5-alpha.117-x64",
++            "name": "OpenClawTray-2026.9.5-alpha.117-win-x64.zip",
++            "compatible": true,
++            "url": "https://example.invalid/no-download"
++          }
++        }
++      ],
++      "expectedSelectedTag": null
++    },
++    {
++      "name": "invalid-release-metadata",
++      "current": "2026.9.5-alpha.9",
++      "channel": "alpha",
++      "releases": [
++        {
++          "tag": "v2026.9.5-alpha.117",
++          "prerelease": true,
++          "draft": true,
++          "published": true,
++          "trustedMetadata": true,
++          "body": "<!-- openclaw-update: ordinary -->",
++          "asset": {
++            "id": "v2026.9.5-alpha.117-x64",
++            "name": "OpenClawTray-2026.9.5-alpha.117-win-x64.zip",
++            "compatible": true,
++            "url": "https://example.invalid/no-download"
++          }
++        },
++        {
++          "tag": "v2026.9.5-alpha.116",
++          "prerelease": true,
++          "draft": false,
++          "published": false,
++          "trustedMetadata": true,
++          "body": "<!-- openclaw-update: ordinary -->",
++          "asset": {
++            "id": "v2026.9.5-alpha.116-x64",
++            "name": "OpenClawTray-2026.9.5-alpha.116-win-x64.zip",
++            "compatible": true,
++            "url": "https://example.invalid/no-download"
++          }
++        },
++        {
++          "tag": "v2026.9.5-alpha.0117",
++          "prerelease": true,
++          "draft": false,
++          "published": true,
++          "trustedMetadata": true,
++          "body": "<!-- openclaw-update: ordinary -->",
++          "asset": {
++            "id": "v2026.9.5-alpha.0117-x64",
++            "name": "OpenClawTray-2026.9.5-alpha.0117-win-x64.zip",
++            "compatible": true,
++            "url": "https://example.invalid/no-download"
++          }
++        },
++        {
++          "tag": "v2026.9.5-beta.2",
++          "prerelease": false,
++          "draft": false,
++          "published": true,
++          "trustedMetadata": true,
++          "body": "<!-- openclaw-update: ordinary -->",
++          "asset": {
++            "id": "v2026.9.5-beta.2-x64",
++            "name": "OpenClawTray-2026.9.5-beta.2-win-x64.zip",
++            "compatible": true,
++            "url": "https://example.invalid/no-download"
++          }
++        },
++        {
++          "tag": "not-a-version",
++          "prerelease": false,
++          "draft": false,
++          "published": true,
++          "trustedMetadata": true,
++          "body": "<!-- openclaw-update: ordinary -->",
++          "asset": {
++            "id": "not-a-version-x64",
++            "name": "OpenClawTray-not-a-version-win-x64.zip",
++            "compatible": true,
++            "url": "https://example.invalid/no-download"
++          }
++        },
++        {
++          "tag": "v2026.9.5-alpha.10",
++          "prerelease": true,
++          "draft": false,
++          "published": true,
++          "trustedMetadata": true,
++          "body": "<!-- openclaw-update: ordinary -->",
++          "asset": {
++            "id": "v2026.9.5-alpha.10-x64",
++            "name": "OpenClawTray-2026.9.5-alpha.10-win-x64.zip",
++            "compatible": true,
++            "url": "https://example.invalid/no-download"
++          }
++        }
++      ],
++      "expectedSelectedTag": "v2026.9.5-alpha.10"
++    },
++    {
++      "name": "security-selected-metadata",
++      "current": "2026.9.5-alpha.93",
++      "channel": "alpha",
++      "releases": [
++        {
++          "tag": "v2026.9.5-alpha.97",
++          "prerelease": true,
++          "draft": false,
++          "published": true,
++          "trustedMetadata": true,
++          "body": "<!-- openclaw-update: security-critical -->",
++          "asset": {
++            "id": "v2026.9.5-alpha.97-x64",
++            "name": "OpenClawTray-2026.9.5-alpha.97-win-x64.zip",
++            "compatible": true,
++            "url": "https://example.invalid/no-download"
++          }
++        }
++      ],
++      "expectedSelectedTag": "v2026.9.5-alpha.97",
++      "gatewayChannel": "extended-stable",
++      "expectedSuppressed": false,
++      "expectedClassification": "Security"
++    },
++    {
++      "name": "ordinary-extended-stable-preserved",
++      "current": "2026.9.5-alpha.93",
++      "channel": "alpha",
++      "releases": [
++        {
++          "tag": "v2026.9.5-alpha.97",
++          "prerelease": true,
++          "draft": false,
++          "published": true,
++          "trustedMetadata": true,
++          "body": "<!-- openclaw-update: ordinary -->",
++          "asset": {
++            "id": "v2026.9.5-alpha.97-x64",
++            "name": "OpenClawTray-2026.9.5-alpha.97-win-x64.zip",
++            "compatible": true,
++            "url": "https://example.invalid/no-download"
++          }
++        }
++      ],
++      "expectedSelectedTag": "v2026.9.5-alpha.97",
++      "gatewayChannel": "extended-stable",
++      "expectedSuppressed": true,
++      "expectedClassification": "Ordinary"
++    },
++    {
++      "name": "installed-alpha-unset-is-not-opt-in",
++      "current": "2026.9.5-alpha.93",
++      "channel": null,
++      "releases": [
++        {
++          "tag": "v2026.9.5-alpha.97",
++          "prerelease": true,
++          "draft": false,
++          "published": true,
++          "trustedMetadata": true,
++          "body": "<!-- openclaw-update: ordinary -->",
++          "asset": {
++            "id": "v2026.9.5-alpha.97-x64",
++            "name": "OpenClawTray-2026.9.5-alpha.97-win-x64.zip",
++            "compatible": true,
++            "url": "https://example.invalid/no-download"
++          }
++        }
++      ],
++      "expectedSelectedTag": null
++    },
++    {
++      "name": "installed-alpha-stable-is-not-opt-in",
++      "current": "2026.9.5-alpha.93",
++      "channel": "stable",
++      "releases": [
++        {
++          "tag": "v2026.9.5-alpha.97",
++          "prerelease": true,
++          "draft": false,
++          "published": true,
++          "trustedMetadata": true,
++          "body": "<!-- openclaw-update: ordinary -->",
++          "asset": {
++            "id": "v2026.9.5-alpha.97-x64",
++            "name": "OpenClawTray-2026.9.5-alpha.97-win-x64.zip",
++            "compatible": true,
++            "url": "https://example.invalid/no-download"
++          }
++        }
++      ],
++      "expectedSelectedTag": null
++    }
++  ]
++}
+\ No newline at end of file
+diff --git a/tests/OpenClaw.Tray.Tests/Fixtures/issue1642-feed.json b/tests/OpenClaw.Tray.Tests/Fixtures/issue1642-feed.json
+new file mode 100644
+index 0000000..dd9b76f
+--- /dev/null
++++ b/tests/OpenClaw.Tray.Tests/Fixtures/issue1642-feed.json
+@@ -0,0 +1,119 @@
++{
++  "latest": {
++    "id": 4,
++    "tag_name": "v2026.9.4",
++    "name": "v2026.9.4",
++    "body": "<!-- openclaw-update: ordinary -->",
++    "draft": false,
++    "prerelease": false,
++    "published_at": "2026-10-01T00:00:00Z",
++    "created_at": "2026-10-01T00:00:00Z",
++    "url": "https://api.github.com/repos/openclaw/openclaw-windows-node/releases/4",
++    "html_url": "https://example.invalid/release/4",
++    "assets": [
++      {
++        "id": 40,
++        "name": "OpenClawTray-2026.9.4-win-x64.zip",
++        "content_type": "application/zip",
++        "size": 1,
++        "state": "uploaded",
++        "browser_download_url": "https://example.invalid/no-download",
++        "url": "https://example.invalid/no-download"
++      }
++    ]
++  },
++  "releases": [
++    {
++      "id": 1,
++      "tag_name": "v2026.9.5-alpha.10",
++      "name": "v2026.9.5-alpha.10",
++      "body": "<!-- openclaw-update: ordinary -->",
++      "draft": false,
++      "prerelease": true,
++      "published_at": "2026-10-01T00:00:00Z",
++      "created_at": "2026-10-01T00:00:00Z",
++      "url": "https://api.github.com/repos/openclaw/openclaw-windows-node/releases/1",
++      "html_url": "https://example.invalid/release/1",
++      "assets": [
++        {
++          "id": 10,
++          "name": "OpenClawTray-2026.9.5-alpha.10-win-x64.zip",
++          "content_type": "application/zip",
++          "size": 1,
++          "state": "uploaded",
++          "browser_download_url": "https://example.invalid/no-download",
++          "url": "https://example.invalid/no-download"
++        }
++      ]
++    },
++    {
++      "id": 2,
++      "tag_name": "v2026.9.5-alpha.117",
++      "name": "v2026.9.5-alpha.117",
++      "body": "<!-- openclaw-update: ordinary -->",
++      "draft": false,
++      "prerelease": true,
++      "published_at": "2026-10-01T00:00:00Z",
++      "created_at": "2026-10-01T00:00:00Z",
++      "url": "https://api.github.com/repos/openclaw/openclaw-windows-node/releases/2",
++      "html_url": "https://example.invalid/release/2",
++      "assets": [
++        {
++          "id": 20,
++          "name": "OpenClawTray-2026.9.5-alpha.117-win-x64.zip",
++          "content_type": "application/zip",
++          "size": 1,
++          "state": "uploaded",
++          "browser_download_url": "https://example.invalid/no-download",
++          "url": "https://example.invalid/no-download"
++        }
++      ]
++    },
++    {
++      "id": 3,
++      "tag_name": "v2026.9.5-alpha.97",
++      "name": "v2026.9.5-alpha.97",
++      "body": "<!-- openclaw-update: ordinary -->",
++      "draft": false,
++      "prerelease": true,
++      "published_at": "2026-10-01T00:00:00Z",
++      "created_at": "2026-10-01T00:00:00Z",
++      "url": "https://api.github.com/repos/openclaw/openclaw-windows-node/releases/3",
++      "html_url": "https://example.invalid/release/3",
++      "assets": [
++        {
++          "id": 30,
++          "name": "OpenClawTray-2026.9.5-alpha.97-win-x64.zip",
++          "content_type": "application/zip",
++          "size": 1,
++          "state": "uploaded",
++          "browser_download_url": "https://example.invalid/no-download",
++          "url": "https://example.invalid/no-download"
++        }
++      ]
++    },
++    {
++      "id": 4,
++      "tag_name": "v2026.9.4",
++      "name": "v2026.9.4",
++      "body": "<!-- openclaw-update: ordinary -->",
++      "draft": false,
++      "prerelease": false,
++      "published_at": "2026-10-01T00:00:00Z",
++      "created_at": "2026-10-01T00:00:00Z",
++      "url": "https://api.github.com/repos/openclaw/openclaw-windows-node/releases/4",
++      "html_url": "https://example.invalid/release/4",
++      "assets": [
++        {
++          "id": 40,
++          "name": "OpenClawTray-2026.9.4-win-x64.zip",
++          "content_type": "application/zip",
++          "size": 1,
++          "state": "uploaded",
++          "browser_download_url": "https://example.invalid/no-download",
++          "url": "https://example.invalid/no-download"
++        }
++      ]
++    }
++  ]
++}
+\ No newline at end of file

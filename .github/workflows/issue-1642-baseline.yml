@@ -1,0 +1,110 @@
+name: Issue 1642 baseline characterization
+
+on:
+  push:
+    branches: [codex/issue-1642-baseline-20261031]
+    paths:
+      - '.github/workflows/issue-1642-baseline.yml'
+      - '.ci/issue-1642/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: issue-1642-baseline-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  characterize:
+    if: github.repository == 'MertBasar0/openclaw-windows-node'
+    runs-on: windows-2025
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      DOTNET_NOLOGO: '1'
+      DOTNET_CLI_HOME: ${{ runner.temp }}/issue1642-dotnet
+      NUGET_PACKAGES: ${{ runner.temp }}/issue1642-nuget
+
+    steps:
+      - name: Preserve reviewed input bytes on the disposable runner
+        run: |
+          git config --global core.autocrlf false
+          if ($LASTEXITCODE -ne 0) { throw 'Could not disable runner line-ending conversion.' }
+          git config --global core.eol lf
+          if ($LASTEXITCODE -ne 0) { throw 'Could not select LF on the disposable runner.' }
+
+      - name: Check out approved test preparation
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          path: control
+          persist-credentials: false
+
+      - name: Check out unchanged upstream baseline
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: openclaw/openclaw-windows-node
+          ref: ef1df54dfe95a8b0a2ae8033425561136d8a70ef
+          path: source
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Select pinned SDK
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: '10.0.402'
+
+      - name: Record runner and source identity
+        run: |
+          New-Item -ItemType Directory -Path evidence | Out-Null
+          $sdk = (& dotnet --version).Trim()
+          if ($LASTEXITCODE -ne 0 -or $sdk -ne '10.0.402') { throw 'Unexpected SDK.' }
+          [ordered]@{
+            testPreparationCommit = $env:GITHUB_SHA
+            upstreamBaseline = 'ef1df54dfe95a8b0a2ae8033425561136d8a70ef'
+            image = $env:ImageOS
+            imageVersion = $env:ImageVersion
+            os = [System.Runtime.InteropServices.RuntimeInformation]::OSDescription
+            architecture = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
+            sdk = $sdk
+            scope = 'pipeline and transport component baseline only'
+            nativeUIProof = $false
+            fullCallerBackendProof = $false
+          } | ConvertTo-Json | Set-Content evidence/runner.json
+
+      - name: Verify and apply only the reviewed tests
+        run: |
+          & ./control/.ci/issue-1642/Prepare-Baseline.ps1 -RepoRoot ./source
+
+      - name: Compile and run the 25 focused baseline cases
+        run: |
+          $root = (Resolve-Path ./source).Path
+          & pwsh -NoLogo -NoProfile -NonInteractive -File ./control/.ci/issue-1642/Run-Baseline.ps1 -RepoRoot $root
+          if ($LASTEXITCODE -ne 0) { throw 'Baseline runner failed; inspect the retained logs and TRX.' }
+
+      - name: Explain the result
+        if: always()
+        run: |
+          $verdicts = @(Get-ChildItem ./source/.openclaw-proof/1642-*/baseline-verdict.json -ErrorAction SilentlyContinue)
+          if ($verdicts.Count -eq 1) {
+            'Expected baseline failures were observed. The product is still broken: 10 failed, 15 passed. No fix, UI proof, or full backend proof is claimed.' >> $env:GITHUB_STEP_SUMMARY
+          } else {
+            'Baseline characterization did not complete as expected. Inspect the build/test logs; setup errors and missing TRX are not product reproduction.' >> $env:GITHUB_STEP_SUMMARY
+          }
+
+      - name: Retain only test evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: issue-1642-baseline-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 7
+          if-no-files-found: error
+          include-hidden-files: true
+          path: |
+            evidence/runner.json
+            source/.openclaw-proof/1642-*/baseline.trx
+            source/.openclaw-proof/1642-*/dotnet.log
+            source/.openclaw-proof/1642-*/baseline-verdict.json

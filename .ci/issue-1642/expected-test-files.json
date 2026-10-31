@@ -1,0 +1,6 @@
+{
+  "tests/OpenClaw.Tray.Tests/Fixtures/issue1642-feed.json": "52ba2f27cdc3abbfdd2dcf1b4a7e6fc90cb55975b89c1a9011ab295e0408378b",
+  "tests/OpenClaw.Tray.Tests/Fixtures/issue1642.json": "a76f77835f7708b19b8565cb8ad02c5a279ae8bfed6f2ffcd8719046fb1d7da6",
+  "tests/OpenClaw.Tray.Tests/Issue1642SelectionTests.cs": "4decdb9c3f7d7046324dec3ca98880bb0a73eb5791bba2de206f9ee08efc9b2c",
+  "tests/OpenClaw.Tray.Tests/Issue1642TransportTests.cs": "15087b337c90d5e5d2d038ba8d1799be6079c8799931fda59b25b8d5d5ebb1c3"
+}
