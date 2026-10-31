@@ -39,7 +39,7 @@ try {
   return
  }
  Assert-Source
- $sdk=(& dotnet --version).Trim();Require-Exit 'SDK selection';if($sdk -cne '10.0.402'){throw 'Unexpected SDK.'}
+ $sdk=(& dotnet --version).Trim();Require-Exit 'SDK selection';if($sdk -cne '10.0.402'){throw "Unexpected SDK: $sdk"}
  $env:OPENCLAW_REPO_ROOT=$repo
  $env:OPENCLAW_TRAY_DATA_DIR=Join-Path $output 'test-data'
  $env:OPENCLAW_TRAY_APPDATA_DIR=Join-Path $output 'test-roaming'
