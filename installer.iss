@@ -102,7 +102,9 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
-Name: "startupicon"; Description: "Start {#MyAppName} when Windows starts"; GroupDescription: "Startup:"; Flags: unchecked
+; Offered on a fresh install only. An upgrade inherits earlier task selections, which would turn
+; autostart back on after the user turned it off in Settings.
+Name: "startupicon"; Description: "Start {#MyAppName} when Windows starts"; GroupDescription: "Startup:"; Flags: unchecked; Check: IsFreshInstall
 
 [Files]
 ; WinUI Tray app - include all files (WinUI needs DLLs, not single-file)
@@ -133,6 +135,8 @@ Root: HKCU; Subkey: "Software\Classes\{#MyProtocol}"; ValueType: string; ValueNa
 Root: HKCU; Subkey: "Software\Classes\{#MyProtocol}"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""
 Root: HKCU; Subkey: "Software\Classes\{#MyProtocol}\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"",0"
 Root: HKCU; Subkey: "Software\Classes\{#MyProtocol}\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""%1"""
+; The same Run value the Settings toggle reads and removes.
+Root: HKCU; Subkey: "SOFTWARE\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "{#MyAutoStartName}"; ValueData: """{app}\{#MyAppExeName}"" --background"; Tasks: startupicon
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; AppUserModelID: "{#MyAppAumid}"
@@ -142,7 +146,6 @@ Name: "{group}\OpenClaw Chat"; Filename: "{app}\{#MyAppExeName}"; Parameters: "{
 Name: "{group}\Check for Updates"; Filename: "{app}\{#MyAppExeName}"; Parameters: "{#MyProtocol}://check-updates"; IconFilename: "{app}\{#MyAppExeName}"; AppUserModelID: "{#MyAppAumid}"
 Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon; AppUserModelID: "{#MyAppAumid}"
-Name: "{userstartup}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--background"; Tasks: startupicon; AppUserModelID: "{#MyAppAumid}"
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent; Check: ShouldLaunchTray
@@ -314,6 +317,11 @@ begin
     Log('Visual C++ Runtime redistributable failed with exit code ' + IntToStr(ResultCode) + '.');
 end;
 #endif
+
+function IsFreshInstall: Boolean;
+begin
+  Result := WizardForm.PrevAppDir = '';
+end;
 
 function ShouldLaunchTray: Boolean;
 begin
@@ -515,10 +523,38 @@ begin
   end;
 end;
 
+procedure MigrateLegacyStartupShortcut;
+var
+  ShortcutPath: string;
+  RunCommand: string;
+begin
+  { Earlier installers created a Startup folder shortcut that Settings can neither see nor remove.
+    Move that choice to the Run value, and drop the shortcut only once the value is in place. }
+  ShortcutPath := ExpandConstant('{userstartup}\{#MyAppName}.lnk');
+  if not FileExists(ShortcutPath) then
+    Exit;
+
+  if RegQueryStringValue(HKCU, 'SOFTWARE\Microsoft\Windows\CurrentVersion\Run',
+      '{#MyAutoStartName}', RunCommand) or
+    RegWriteStringValue(HKCU, 'SOFTWARE\Microsoft\Windows\CurrentVersion\Run',
+      '{#MyAutoStartName}', AddQuotes(ExpandConstant('{app}\{#MyAppExeName}')) + ' --background') then
+  begin
+    if DeleteFile(ShortcutPath) then
+      Log('Migrated Startup folder shortcut to the Run registration.')
+    else
+      Log('Could not remove the Startup folder shortcut.');
+  end
+  else
+    Log('Could not migrate the Startup folder shortcut. It was left in place.');
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then
+  begin
+    MigrateLegacyStartupShortcut;
     MigrateLegacyBackgroundLaunch;
+  end;
 end;
 
 procedure EnsureLocalGatewayCleanupChoice;

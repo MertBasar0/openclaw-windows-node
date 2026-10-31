@@ -89,6 +89,14 @@ internal static class AutoStartReconciliation
         => current == captured && reconciled != captured;
 
     /// <summary>
+    /// Reports a Run value or scheduled task the installer created before settings existed, so the
+    /// Settings toggle shows it and can turn it off. An enabled preference is never lowered here:
+    /// the read has no way to tell a missing registration from one it failed to see.
+    /// </summary>
+    internal static async Task<bool> ReconcileUnpackagedAsync(bool configured, Func<Task<bool>> isRegistered)
+        => configured || await isRegistered();
+
+    /// <summary>
     /// Reconciles the persisted preference against the real Windows startup state and
     /// returns the value the app should now report and store.
     /// </summary>

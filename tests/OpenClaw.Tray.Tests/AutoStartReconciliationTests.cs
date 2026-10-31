@@ -24,6 +24,20 @@ public sealed class AutoStartReconciliationTests
 
     private static Func<bool, Task> SetThrows(Exception ex) => _ => Task.FromException(ex);
 
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(false, true, true)]
+    [InlineData(true, false, true)]
+    [InlineData(true, true, true)]
+    public async Task Unpackaged_ReportsAnExistingRegistrationAndKeepsAnEnabledPreference(
+        bool configured, bool registered, bool expected)
+    {
+        var result = await AutoStartReconciliation.ReconcileUnpackagedAsync(
+            configured, () => Task.FromResult(registered));
+
+        Assert.Equal(expected, result);
+    }
+
     [Fact]
     public async Task QueryThrows_KeepsEnabledPreference()
     {

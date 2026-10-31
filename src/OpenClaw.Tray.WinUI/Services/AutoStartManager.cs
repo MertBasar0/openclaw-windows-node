@@ -170,7 +170,7 @@ public static class AutoStartManager
             return Task.FromResult(false);
 
         if (!PackageHelper.IsPackaged)
-            return Task.FromResult(configured);
+            return AutoStartReconciliation.ReconcileUnpackagedAsync(configured, () => Task.Run(IsAutoStartEnabled));
 
         return AutoStartReconciliation.ReconcileAsync(
             configured,
