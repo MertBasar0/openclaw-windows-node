@@ -57,6 +57,10 @@ jobs:
           dotnet-version: '10.0.402'
 
       - name: Build hook, A installer and B ZIP without installing or launching them
+        env:
+          # Pinned docs/RELEASING.md permits this for unsigned local Release tests.
+          # No tag/release publication, signing credentials or trust changes.
+          RequireSignedCleanupHost: 'false'
         run: |
           & ./control/.ci/issue-1676/Build-Candidates.ps1 -RepoRoot ./source -OutputRoot ./prepared
 

@@ -6,6 +6,13 @@ It never runs Setup, Companion, the hook or the updater. No product fix is prese
 The artificial A/B versions are 2026.9.8-1 and 2026.9.8-2. Both use identical
 baseline product source. These unsigned files are not official releases.
 
+Build policy: RequireSignedCleanupHost=false is scoped to the build step, using
+the intentional unsigned local Release-testing option documented in the pinned
+docs/RELEASING.md (lines 955-977) and upstream non-published release-smoke jobs.
+The first build stopped at the default signed-cleanup prerequisite; its failure
+receipt is retained. This option does not change DevBuild/release identity,
+product source, OS trust, execution policy or any release-signing workflow.
+
 Use FILES-SHA256.json to verify the downloaded artifacts. Keep source-a and
 base-b manifests with their respective files. The source manifest and hook
 receipt bind the produced binaries to their inputs. Existing builds need not
