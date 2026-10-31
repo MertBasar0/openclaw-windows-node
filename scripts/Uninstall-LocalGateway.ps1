@@ -182,10 +182,10 @@ function Resolve-AppDataDir {
     }
 
     function Expand-ExecApprovalsHomePath {
-        param([string]$Path, [string]$Home)
-        if ($Path -eq '~') { return $Home }
+        param([string]$Path, [string]$HomePath)
+        if ($Path -eq '~') { return $HomePath }
         if ($Path.StartsWith('~\') -or $Path.StartsWith('~/')) {
-            return Join-Path $Home $Path.Substring(2)
+            return Join-Path $HomePath $Path.Substring(2)
         }
         return $Path
     }
@@ -279,8 +279,10 @@ function Resolve-AppDataDir {
 
         try {
             $uri = [Uri]$Url
-            $host = $uri.Host.ToLowerInvariant()
-            return $host -eq 'localhost' -or $host -eq '127.0.0.1' -or $host -eq '::1' -or $host -eq '[::1]'
+            $urlHost = $uri.Host.ToLowerInvariant()
+            # Windows PowerShell 5.1 runs on .NET Framework, whose Uri expands [::1] to its full form.
+            return $urlHost -eq 'localhost' -or $urlHost -eq '127.0.0.1' -or $urlHost -eq '::1' -or $urlHost -eq '[::1]' -or
+                $urlHost -eq '[0000:0000:0000:0000:0000:0000:0000:0001]'
         } catch {
             return $false
         }
