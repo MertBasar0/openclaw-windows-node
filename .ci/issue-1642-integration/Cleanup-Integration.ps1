@@ -22,7 +22,7 @@ if ($state.proxyPid) {
 }
 if ($state.thumbprint) {
     if ($state.thumbprint -notmatch '^[0-9A-Fa-f]{40}$') { throw 'Invalid certificate identity.' }
-    $store = [Security.Cryptography.X509Certificates.X509Store]::new('Root','CurrentUser')
+    $store = [Security.Cryptography.X509Certificates.X509Store]::new('Root','LocalMachine')
     $store.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
     try {
         foreach ($cert in $store.Certificates.Find('FindByThumbprint',$state.thumbprint,$false)) {

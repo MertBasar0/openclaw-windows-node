@@ -107,7 +107,10 @@ try {
     $request = [Security.Cryptography.X509Certificates.CertificateRequest]::new(
         ('CN=api.github.com, OU=OpenClaw1642-' + $id), $key, [Security.Cryptography.HashAlgorithmName]::SHA256,
         [Security.Cryptography.RSASignaturePadding]::Pkcs1)
-    $request.CertificateExtensions.Add([Security.Cryptography.X509Certificates.X509BasicConstraintsExtension]::new($true, $false, 0, $true))
+    $request.CertificateExtensions.Add([Security.Cryptography.X509Certificates.X509BasicConstraintsExtension]::new($false, $false, 0, $true))
+    $keyUsage = [Security.Cryptography.X509Certificates.X509KeyUsageFlags]::DigitalSignature -bor
+        [Security.Cryptography.X509Certificates.X509KeyUsageFlags]::KeyEncipherment
+    $request.CertificateExtensions.Add([Security.Cryptography.X509Certificates.X509KeyUsageExtension]::new($keyUsage, $true))
     $names = [Security.Cryptography.X509Certificates.SubjectAlternativeNameBuilder]::new()
     $names.AddDnsName('api.github.com'); $request.CertificateExtensions.Add($names.Build())
     $usages = [Security.Cryptography.OidCollection]::new()
@@ -119,20 +122,22 @@ try {
     $rootCertificate = [Security.Cryptography.X509Certificates.X509Certificate2]::new(
         $certificate.Export([Security.Cryptography.X509Certificates.X509ContentType]::Cert))
     Save-CleanupState
-    $store = [Security.Cryptography.X509Certificates.X509Store]::new('Root','CurrentUser')
-    $stage = Enter-ProofStage 'fixture-current-user-trust'
+    # Hosted Windows cannot confirm interactive CurrentUser root imports. Trust only this
+    # short-lived non-CA TLS leaf in the disposable machine, then remove it by thumbprint.
+    $store = [Security.Cryptography.X509Certificates.X509Store]::new('Root','LocalMachine')
+    $stage = Enter-ProofStage 'fixture-hosted-machine-trust'
     $certFile = Join-Path $work 'fixture-public.cer'
     [IO.File]::WriteAllBytes($certFile, $rootCertificate.RawData)
     $import = Start-Process -FilePath "$env:SystemRoot/System32/certutil.exe" -PassThru -NoNewWindow `
-        -ArgumentList ('-user -f -addstore Root "{0}"' -f $certFile)
+        -ArgumentList ('-f -addstore Root "{0}"' -f $certFile)
     if (-not $import.WaitForExit(30000)) {
         $import.Kill(); $import.WaitForExit()
-        throw 'CurrentUser fixture certificate import did not complete within 30s.'
+        throw 'Hosted fixture certificate import did not complete within 30s.'
     }
-    if ($import.ExitCode -ne 0) { throw "CurrentUser fixture certificate import failed ($($import.ExitCode))." }
+    if ($import.ExitCode -ne 0) { throw "Hosted fixture certificate import failed ($($import.ExitCode))." }
     $store.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
     if ($store.Certificates.Find('FindByThumbprint',$rootCertificate.Thumbprint,$false).Count -ne 1) {
-        throw 'Temporary public fixture certificate missing from CurrentUser.'
+        throw 'Temporary public fixture certificate missing from the disposable machine store.'
     }
     $stage = Enter-ProofStage 'fixture-proxy-launch'
     $proxyScript = Join-Path $PSScriptRoot 'fixture-proxy.mjs'
