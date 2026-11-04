@@ -9,7 +9,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   windows-proof:
-    if: github.event_name == 'push' && github.event.created && !github.event.deleted && github.repository == 'MertBasar0/openclaw-windows-node' && github.ref == 'refs/heads/codex/pr1959-win-proof-20261104'
+    if: github.event_name == 'push' && (github.event.created || github.event.before == '28b48bc32fa999feb222bc50a24adb367fb8752c') && !github.event.deleted && github.repository == 'MertBasar0/openclaw-windows-node' && github.ref == 'refs/heads/codex/pr1959-win-proof-20261104'
     runs-on: windows-2025-vs2026
     timeout-minutes: 60
     defaults:
@@ -57,13 +57,16 @@ jobs:
           (Get-FileHash -LiteralPath $AppFile).Hash | Set-Content -LiteralPath (Join-Path $env:INNO_PROOF_EVIDENCE 'app-before.sha256')
       - id: sdk
         uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        env:
+          DOTNET_INSTALL_DIR: ${{ runner.temp }}\issue1959-sdk
         with:
           dotnet-version: '10.0.402'
       - id: helper
         name: Prepare test result verifier
         working-directory: source
         run: |
-          if ((dotnet --version).Trim() -cne '10.0.402') { throw 'Unexpected .NET SDK.' }
+          $version = (dotnet --version).Trim()
+          if ($version -cne '10.0.402') { dotnet --list-sdks; throw "Expected 10.0.402, resolved $version." }
           @'
           param([Parameter(Mandatory)][ValidateSet('Shared','Tray','Inno','Startup','Mutation','Restored')][string]$Lane)
           $ErrorActionPreference = 'Stop'
