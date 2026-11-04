@@ -67,7 +67,7 @@ try {
     $stage = 'compile'
     & dotnet --info | Set-Content (Join-Path $evidence 'dotnet-info.txt')
     & node --version | Set-Content (Join-Path $evidence 'node-version.txt')
-    & dotnet build $project -c Release -r win-x64 --verbosity minimal 2>&1 |
+    & dotnet build $project -c Release -r win-x64 --disable-build-servers --verbosity minimal 2>&1 |
         Tee-Object -FilePath (Join-Path $evidence 'build.log')
     if ($LASTEXITCODE -ne 0) { throw 'Proof project compilation failed.' }
     $stage = 'network-isolation'

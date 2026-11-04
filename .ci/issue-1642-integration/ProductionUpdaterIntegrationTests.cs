@@ -166,7 +166,7 @@ public sealed class ProductionUpdaterIntegrationTests
             backend.DownloadAndInstallAsync(() => completed = true));
         Assert.False(completed);
         Assert.False(File.Exists(Path.Combine(Path.GetTempPath(), AssetName(tag))));
-        var download = Assert.Single(Requests().Where(row => row.GetProperty("kind").GetString() == "blocked-download"));
+        var download = Assert.Single(Requests(), row => row.GetProperty("kind").GetString() == "blocked-download");
         Assert.Equal("/fixture-assets/" + AssetName(tag), download.GetProperty("path").GetString());
         Assert.DoesNotContain(Requests(), row => row.GetProperty("kind").GetString() == "forbidden");
     }
