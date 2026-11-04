@@ -1,0 +1,184 @@
+name: PR 1959 native flyout diagnostic
+'on':
+  push:
+    branches: ['codex/pr1959-win-proof-20261104']
+permissions:
+  contents: read
+concurrency:
+  group: native-flyout-diag-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  diagnose:
+    if: github.event_name == 'push' && github.event.before == 'ce1cb7e6cac02ecf7e24c238e9395438805fa606' && !github.event.deleted && github.repository == 'MertBasar0/openclaw-windows-node' && github.ref == 'refs/heads/codex/pr1959-win-proof-20261104'
+    runs-on: windows-2025-vs2026
+    timeout-minutes: 75
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      DOTNET_NOLOGO: '1'
+    steps:
+      - name: Require disposable hosted Windows
+        run: |
+          if (-not $IsWindows -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') { throw 'Expected GitHub-hosted Windows.' }
+          git config --global core.autocrlf false
+          if ($LASTEXITCODE) { throw 'Could not preserve checkout line endings.' }
+          git config --global core.eol lf
+          if ($LASTEXITCODE) { throw 'Could not preserve source bytes.' }
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: openclaw/openclaw-windows-node
+          ref: d29bc8fcef1fed5ad769c2554aa2ce15e7a7864d
+          path: source
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73
+        with:
+          dotnet-version: '10.0.403'
+      - name: Configure the same native WindowsAppRuntime and CI desktop
+        working-directory: source
+        run: |
+          $root = 'https://aka.ms/windowsappsdk/2.6/2.6.4'
+          $installer = Join-Path $env:RUNNER_TEMP 'windowsappruntimeinstall-x64.exe'
+          Invoke-WebRequest -Uri "$root/windowsappruntimeinstall-x64.exe" -OutFile $installer
+          $result = Start-Process -Wait -PassThru -FilePath $installer -ArgumentList '--quiet'
+          if ($result.ExitCode) { throw "WindowsAppRuntime installer exit $($result.ExitCode)." }
+          ./scripts/Set-CiDesktopResolution.ps1
+      - name: Reproduce baseline and compare only the awaited native close
+        working-directory: source
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          $evidence = Join-Path $env:RUNNER_TEMP 'flyout-evidence'
+          $rawRoot = Join-Path $env:RUNNER_TEMP 'flyout-raw'
+          New-Item $evidence,$rawRoot -ItemType Directory -Force | Out-Null
+          $target = 'OpenClaw.Tray.UITests.ReactorChatLayoutProofTests.SandboxFlyout_ReflectsSettingsWithoutChangingDraftAndOpensSettings'
+          $testProject = 'tests/OpenClaw.Tray.UITests'
+          $file = "$testProject/ReactorChatLayoutProofTests.cs"
+          $sha = 'd29bc8fcef1fed5ad769c2554aa2ce15e7a7864d'
+          $tree = '8fa386d9b8d692b27eb97c135add89b8996ed4a5'
+          if ((git rev-parse HEAD) -cne $sha -or (git rev-parse 'HEAD^{tree}') -cne $tree -or (git rev-parse "HEAD:$file") -cne '555c72d4d0c5473f9f36b08470d1b296cce24cca' -or @(git status --porcelain).Count) { throw 'Unexpected checkout, tree, source blob or dirty files.' }
+          $actualSDK = dotnet --version
+          if ($LASTEXITCODE -ne 0 -or $actualSDK -cne '10.0.403') { throw "Unexpected SDK $actualSDK." }
+          $rows = [Collections.Generic.List[object]]::new()
+          function Save-Record($record) {
+              $rows.Add([pscustomobject]$record)
+              ConvertTo-Json -InputObject $rows.ToArray() -Depth 6 | Set-Content "$evidence/results.json"
+              $label = $record.label
+              "$label : $($record.outcome), exit $($record.exit), widths: $($record.widths -join ', ')" | Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY -Append | Write-Host
+          }
+          function Invoke-Case([string]$phase, [int]$index, [bool]$full) {
+              $kind = if ($full) { 'full' } else { 'focused' }
+              $label = "$phase-$kind-$index"
+              $tmp = Join-Path $rawRoot $label
+              New-Item $tmp -ItemType Directory | Out-Null
+              foreach ($key in 'DATA_DIR','APPDATA_DIR','LOCALAPPDATA_DIR') {
+                  $path = Join-Path $tmp $key
+                  New-Item $path -ItemType Directory | Out-Null
+                  Set-Item "Env:OPENCLAW_TRAY_$key" $path
+              }
+              $filter = if ($full) { 'Category!=Accessibility&Category!=NativeOnboardingProof&Category!=GatewayFixture' } else { "FullyQualifiedName=$target" }
+              # Invoke the same VSTest entry point in a fresh process; raw logs/TRX stay in runner temp only.
+              $raw = "$tmp/stdout.log"
+              & pwsh -NoProfile -File ./scripts/Invoke-CiTest.ps1 -Project $testProject -Runtime win-x64 -ResultsDirectory "$tmp/trx" -TrxFileName run.trx -Filter $filter -HangTimeoutSeconds 300 *> $raw
+              $exit = $LASTEXITCODE
+              $log = Get-Content $raw -Raw
+              $passedWidths = @( [regex]::Matches($log, "Passed $([regex]::Escape($target))\(width: (320|480|800)\)") | ForEach-Object { [int]$_.Groups[1].Value } )
+              $blamed = [regex]::IsMatch($log, "(?m)The test running when the crash occurred:\s*(?:\r?\n\s*)?$([regex]::Escape($target))\s*$")
+              $nativeCrash = $log -match '(?i)Test host process crashed'
+              $hung = $log -match '(?i)inactivity time of|hang dump|test run was aborted.*timeout|test run was aborted.*hanging|specified inactivity time'
+              $report = @(Get-ChildItem "$tmp/trx" -Recurse -Filter run.trx -ErrorAction SilentlyContinue)
+              $counts = $null
+              $trxRows = @()
+              if ($report.Count -eq 1) {
+                  [xml]$trx = Get-Content $report[0].FullName -Raw
+                  $counter = $trx.SelectSingleNode("//*[local-name()='Counters']")
+                  if ($counter) { $counts = [ordered]@{ total = [int]$counter.total; passed = [int]$counter.passed; failed = [int]$counter.failed; notExecuted = [int]$counter.notExecuted } }
+                  $trxRows = @($trx.SelectNodes("//*[local-name()='UnitTestResult']") | Where-Object { $_.testName -like "*$target*" } | ForEach-Object { [ordered]@{ name=[string]$_.testName; outcome=[string]$_.outcome; duration=[string]$_.duration } })
+                  # Publish target-only TRX rows/counters, never raw XML, exception strings, attach paths or dumps.
+                  $doc = [xml]'<TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010"><Results/><ResultSummary/></TestRun>'
+                  foreach ($row in $trxRows) {
+                      $node = $doc.CreateElement('UnitTestResult', $doc.DocumentElement.NamespaceURI)
+                      foreach ($k in $row.Keys) { $node.SetAttribute($(if($k -eq 'name'){'testName'}else{$k}),[string]$row[$k]) }
+                      $null = $doc.DocumentElement.FirstChild.AppendChild($node)
+                  }
+                  if ($counts) {
+                      $node = $doc.CreateElement('Counters',$doc.DocumentElement.NamespaceURI)
+                      foreach($k in $counts.Keys) {$node.SetAttribute($k,[string]$counts[$k])}
+                      $null = $doc.DocumentElement.LastChild.AppendChild($node)
+                  }
+                  $doc.Save("$evidence/$label.trx")
+              }
+              $allWidths = (($passedWidths | Sort-Object) -join ',') -eq '320,480,800'
+              $trxPassed = @($trxRows | Where-Object outcome -eq 'Passed').Count -eq 3
+              $healthy = $exit -eq 0 -and $allWidths -and $trxPassed -and $counts -and $counts.failed -eq 0 -and ($full -or $counts.total -eq 3)
+              $outcome = if ($healthy) { 'passed' } elseif ($hung) { 'hung' } elseif ($exit -ne 0 -and $nativeCrash -and $blamed) { 'target-host-crash' } else { 'other-failure' }
+              Save-Record ([ordered]@{ label=$label; outcome=$outcome; exit=$exit; widths=$passedWidths; targetBlamed=$blamed; hostCrash=$nativeCrash; hang=$hung; counters=$counts; targetTrx=$trxRows })
+              return $outcome
+          }
+          $env:OPENCLAW_REPO_ROOT = (Get-Location).Path
+          $env:OPENCLAW_CI_COLLECT_COVERAGE = 'false'
+          $env:DOTNET_DbgEnableMiniDump = '0'
+          "Base $sha, tree $tree, SDK $actualSDK, Windows image $env:ImageOS / $env:ImageVersion. Candidate only changes the final Sandbox flyout Hide call to the existing native Closed-event waiter (prior art openclaw/openclaw-windows-node#1981)." >> $env:GITHUB_STEP_SUMMARY
+          & dotnet restore $testProject -r win-x64 --verbosity quiet
+          if ($LASTEXITCODE) { throw 'Restore failed.' }
+          & dotnet build $testProject -c Debug -r win-x64 --no-restore --verbosity quiet
+          if ($LASTEXITCODE) { throw 'Baseline build failed.' }
+          $crashes = 0
+          for ($i=1; $i -le 6; $i++) {
+              $result = Invoke-Case baseline $i $false
+              if ($result -eq 'target-host-crash') { $crashes++ }
+              elseif ($result -ne 'passed') { throw "Baseline $result; causal comparison unavailable." }
+              if ($crashes -ge 2) { break }
+          }
+          $useFull = $false
+          if ($crashes -eq 0) {
+              $result = Invoke-Case baseline 1 $true
+              if ($result -eq 'passed') { throw 'NOT_REPRODUCED: six focused runs and one full upstream Tray UI filter passed. No candidate proof.' }
+              if ($result -ne 'target-host-crash') { throw "Full baseline $result was not blamed on the target; no candidate proof." }
+              $useFull = $true
+          }
+          # Git apply verifies context; exactly one changed file must remain.
+          $patch = @'
+          diff --git a/tests/OpenClaw.Tray.UITests/ReactorChatLayoutProofTests.cs b/tests/OpenClaw.Tray.UITests/ReactorChatLayoutProofTests.cs
+          --- a/tests/OpenClaw.Tray.UITests/ReactorChatLayoutProofTests.cs
+          +++ b/tests/OpenClaw.Tray.UITests/ReactorChatLayoutProofTests.cs
+          @@ -333,7 +333,7 @@
+                       });
+                       await CaptureAsync(composerContent!, $"Sandbox-on-composer-{width}");
+                       await CaptureAsync(popupContent!, $"Sandbox-on-flyout-{width}");
+          -            await ui.RunOnUIAsync(() => FindControl<Button>(surface, "ChatComposerSandbox").Flyout.Hide());
+          +            await ChangeFlyoutAsync(surface, "ChatComposerSandbox", open: false);
+                   }, sandboxSettings: settings, onSandboxSettings: () => navigationCount++,
+                       sandboxStatus: sandboxStatus);
+               }
+          '@
+          $patchFile = Join-Path $rawRoot 'candidate.patch'
+          [IO.File]::WriteAllText($patchFile,$patch.Replace("`r`n","`n").TrimEnd()+"`n",[Text.UTF8Encoding]::new($false))
+          & git apply --check $patchFile
+          if ($LASTEXITCODE) { throw 'Candidate patch does not apply.' }
+          & git apply $patchFile
+          if ($LASTEXITCODE -or ((git diff --name-only HEAD) -join '') -cne $file) { throw 'Unexpected candidate diff.' }
+          "Candidate diff SHA256 $((Get-FileHash $patchFile).Hash), source blob $(git hash-object $file)" >> $env:GITHUB_STEP_SUMMARY
+          & dotnet build $testProject -c Debug -r win-x64 --no-restore --verbosity quiet
+          if ($LASTEXITCODE) { throw 'Candidate build failed.' }
+          for ($i=1; $i -le 6; $i++) {
+              $result = Invoke-Case candidate $i $false
+              if ($result -ne 'passed') { throw "CANDIDATE_NOT_PROVEN: $result in candidate trial $i." }
+          }
+          if ($useFull) {
+              $result = Invoke-Case candidate 1 $true
+              if ($result -ne 'passed') { throw "CANDIDATE_NOT_PROVEN: full candidate $result." }
+          }
+          "Observed $crashes baseline focused target-host crash(es), full comparison=$useFull; all corresponding candidate checks passed. This measures the candidate association, not the native crash site." >> $env:GITHUB_STEP_SUMMARY
+      - name: Upload only sanitized target status and target TRX
+        if: ${{ always() && !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: flyout-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/flyout-evidence/results.json
+            ${{ runner.temp }}/flyout-evidence/*.trx
+          if-no-files-found: warn
+          retention-days: 7
