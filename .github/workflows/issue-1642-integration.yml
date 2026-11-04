@@ -23,6 +23,9 @@
     "proof": {
       "if": "github.repository == 'MertBasar0/openclaw-windows-node' && github.ref == 'refs/heads/openclaw/issue-1642-integration-proof'",
       "runs-on": "windows-2025",
+      "env": {
+        "DOTNET_CLI_TELEMETRY_OPTOUT": "1"
+      },
       "timeout-minutes": 20,
       "steps": [
         {
