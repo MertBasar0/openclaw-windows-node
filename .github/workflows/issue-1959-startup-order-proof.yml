@@ -1,0 +1,189 @@
+name: Isolated PR 1959 startup-order proof
+'on':
+  push:
+    branches: ['codex/pr1959-win-proof-20261104']
+permissions:
+  contents: read
+concurrency:
+  group: inno-order-proof-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  windows-proof:
+    if: github.event_name == 'push' && github.event.created && !github.event.deleted && github.repository == 'MertBasar0/openclaw-windows-node' && github.ref == 'refs/heads/codex/pr1959-win-proof-20261104'
+    runs-on: windows-2025-vs2026
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      DOTNET_NOLOGO: '1'
+    steps:
+      - name: Isolate hosted proof
+        run: |
+          if (-not $IsWindows -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') { throw 'Expected GitHub-hosted Windows.' }
+          git config --global core.autocrlf false
+          if ($LASTEXITCODE -ne 0) { throw 'Could not preserve source bytes.' }
+          git config --global core.eol lf
+          if ($LASTEXITCODE -ne 0) { throw 'Could not preserve source bytes.' }
+          $evidence = Join-Path $env:RUNNER_TEMP 'inno-order-evidence'
+          New-Item -ItemType Directory -Path $evidence | Out-Null
+          "INNO_PROOF_EVIDENCE=$evidence" >> $env:GITHUB_ENV
+          "OPENCLAW_REPO_ROOT=$(Join-Path $env:GITHUB_WORKSPACE source)" >> $env:GITHUB_ENV
+          foreach ($key in 'DATA_DIR','APPDATA_DIR','LOCALAPPDATA_DIR') {
+            $dir = Join-Path $env:RUNNER_TEMP "inno-tray-$key"
+            New-Item -ItemType Directory -Path $dir | Out-Null
+            "OPENCLAW_TRAY_${key}=$dir" >> $env:GITHUB_ENV
+          }
+          "DOTNET_CLI_HOME=$(Join-Path $env:RUNNER_TEMP 'inno-dotnet')" >> $env:GITHUB_ENV
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: 'dfda81ffb52e6a9fb1ba0876eed20ce05b17adb0'
+          path: source
+          fetch-depth: 0
+          persist-credentials: false
+      - id: pin
+        name: Verify candidate identity and allowed change
+        working-directory: source
+        run: |
+          $head = git rev-parse HEAD
+          $tree = git rev-parse 'HEAD^{tree}'
+          $parents = git show -s --format=%P HEAD
+          $changed = @(git diff --name-only '92c9c3102acba844e9c9d62b584ef5dcd59fd58d' HEAD --)
+          $dirty = @(git status --porcelain)
+          if ($LASTEXITCODE -ne 0 -or $head -cne 'dfda81ffb52e6a9fb1ba0876eed20ce05b17adb0' -or $tree -cne 'f989a872820dcb5798f76dc6b4ff0d57896b190c' -or $parents -cne '92c9c3102acba844e9c9d62b584ef5dcd59fd58d' -or $dirty.Count -ne 0 -or $changed.Count -ne 1 -or $changed[0] -cne 'tests/OpenClaw.Tray.Tests/InnoInstallationMetadataTests.cs') { throw 'Wrong candidate head, tree, parent or changed files.' }
+          "Candidate: $head; tree: $tree; parent: $parents; control workflow: $env:GITHUB_SHA" >> $env:GITHUB_STEP_SUMMARY
+          $AppFile = 'src/OpenClaw.Tray.WinUI/App.xaml.cs'
+          (Get-FileHash -LiteralPath $AppFile).Hash | Set-Content -LiteralPath (Join-Path $env:INNO_PROOF_EVIDENCE 'app-before.sha256')
+      - id: sdk
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: '10.0.402'
+      - id: helper
+        name: Prepare test result verifier
+        working-directory: source
+        run: |
+          if ((dotnet --version).Trim() -cne '10.0.402') { throw 'Unexpected .NET SDK.' }
+          @'
+          param([Parameter(Mandatory)][ValidateSet('Shared','Tray','Inno','Startup','Mutation','Restored')][string]$Lane)
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          $class = 'OpenClaw.Tray.Tests.InnoInstallationMetadataTests'
+          $case = "$class.StartupRefreshFollowsAdmissionAndCompletesBeforeStartupMarker"
+          $suite = if ($Lane -eq 'Shared') { 'Shared' } else { 'Tray' }
+          $project = "./tests/OpenClaw.$suite.Tests/OpenClaw.$suite.Tests.csproj"
+          $dir = Join-Path $env:INNO_PROOF_EVIDENCE $Lane
+          New-Item -ItemType Directory -Path $dir | Out-Null
+          # Fresh test projects must restore/build or --no-restore can silently run zero tests.
+          $parameters = @('test',$project,'-c','Debug','--logger',"trx;LogFileName=$Lane.trx",'--results-directory',$dir)
+          if ($Lane -eq 'Inno') { $parameters += @('--filter',"FullyQualifiedName~$class.") }
+          if ($Lane -in @('Startup','Mutation','Restored')) { $parameters += @('--filter',"FullyQualifiedName=$case") }
+          if ($Lane -in @('Mutation','Restored')) { $parameters += '--no-build' }
+          & dotnet @parameters *> (Join-Path $dir 'console.log')
+          $code = $LASTEXITCODE
+          $trx = Join-Path $dir "$Lane.trx"
+          if (-not (Test-Path $trx)) { Get-Content (Join-Path $dir 'console.log') -Tail 20; throw "$Lane produced no TRX (exit $code)." }
+          [xml]$xml = Get-Content -LiteralPath $trx -Raw
+          $c = $xml.TestRun.ResultSummary.Counters
+          $rows = @($xml.TestRun.Results.UnitTestResult)
+          $pass = @($rows | Where-Object outcome -eq 'Passed').Count
+          $fail = @($rows | Where-Object outcome -eq 'Failed').Count
+          $skips = @($rows | Where-Object outcome -eq 'NotExecuted').Count
+          $inno = @($rows | Where-Object testName -like "$class.*")
+          $single = @($rows | Where-Object testName -eq $case)
+          "$Lane : exit=$code total=$($c.total) executed=$($c.executed) passed=$pass failed=$fail skipped=$skips" >> $env:GITHUB_STEP_SUMMARY
+          if ($rows.Count -eq 0 -or $rows.Count -ne [int]$c.total -or $pass -ne [int]$c.passed -or $fail -ne [int]$c.failed -or ([int]$c.notExecuted -ne $skips -and [int]$c.notExecuted -ne 0) -or ($pass+$fail) -ne [int]$c.executed -or $rows.Count -ne ($pass+$fail+$skips)) { throw "$Lane invalid/incomplete TRX totals." }
+          if ($Lane -eq 'Mutation') {
+            if ($code -eq 0 -or $rows.Count -ne 1 -or $single.Count -ne 1 -or $fail -ne 1) { throw 'Mutation did not fail exactly the owner test.' }
+            $errorText = [string]$single[0].Output.ErrorInfo.Message
+            if ($errorText -notmatch 'Assert\.InRange\(' -or $errorText -notmatch '(?im)^\s*Actual(?: value)?:\s*-1\s*$') { throw "Unexpected mutation failure: $errorText" }
+          } else {
+            if ($code -ne 0 -or $pass -lt 1 -or $fail -ne 0 -or $xml.TestRun.ResultSummary.outcome -notin @('Completed','Passed')) { throw "$Lane failed." }
+            if ($Lane -in @('Shared','Tray') -and $pass -lt 4000) { throw "$Lane did not execute the full expected suite." }
+            if ($Lane -in @('Tray','Inno') -and ($inno.Count -ne 8 -or @($inno | Where-Object outcome -ne 'Passed').Count -ne 0)) { throw "$Lane did not pass all 8 Inno tests." }
+            if ($Lane -eq 'Inno' -and $rows.Count -ne 8) { throw 'Inno filter selected unexpected tests.' }
+            if ($Lane -in @('Startup','Restored') -and ($rows.Count -ne 1 -or $single.Count -ne 1)) { throw "$Lane did not select the exact owner test." }
+          }
+          # Expected mutation produces a nonzero dotnet exit; the verifier succeeded.
+          exit 0
+          '@ | Set-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'Invoke-InnoProof.ps1') -Encoding utf8NoBOM
+      - id: build
+        name: Required full repo build
+        if: ${{ (success() || failure()) && steps.helper.outcome == 'success' }}
+        working-directory: source
+        run: |
+          & powershell.exe -NoProfile -File ./build.ps1 *> (Join-Path $env:INNO_PROOF_EVIDENCE 'full-build.log')
+          $code = $LASTEXITCODE
+          "Full build: exit $code" >> $env:GITHUB_STEP_SUMMARY
+          if ($code -ne 0) { Get-Content (Join-Path $env:INNO_PROOF_EVIDENCE 'full-build.log') -Tail 30; exit $code }
+      - id: shared
+        name: Required Shared suite
+        if: ${{ (success() || failure()) && steps.helper.outcome == 'success' }}
+        working-directory: source
+        run: '& "$env:RUNNER_TEMP/Invoke-InnoProof.ps1" Shared'
+      - id: tray
+        name: Required Tray suite
+        if: ${{ (success() || failure()) && steps.helper.outcome == 'success' }}
+        working-directory: source
+        run: '& "$env:RUNNER_TEMP/Invoke-InnoProof.ps1" Tray'
+      - id: inno
+        name: Entire Inno class on clean candidate
+        if: ${{ (success() || failure()) && steps.helper.outcome == 'success' }}
+        working-directory: source
+        run: '& "$env:RUNNER_TEMP/Invoke-InnoProof.ps1" Inno'
+      - id: startup
+        name: Exact startup contract on clean candidate
+        if: ${{ (success() || failure()) && steps.helper.outcome == 'success' }}
+        working-directory: source
+        run: '& "$env:RUNNER_TEMP/Invoke-InnoProof.ps1" Startup'
+      - id: mutation
+        name: Prove the case detects a lost await and restore original bytes
+        if: ${{ (success() || failure()) && steps.startup.outcome == 'success' }}
+        working-directory: source
+        run: |
+          $path = (Resolve-Path 'src/OpenClaw.Tray.WinUI/App.xaml.cs').Path
+          $original = [IO.File]::ReadAllBytes($path)
+          $src = [Text.Encoding]::UTF8.GetString($original)
+          $good = 'await _activationRouter.DispatchPlanAsync(launchPlan, this, CancellationToken.None);'
+          $bad = '_ = _activationRouter.DispatchPlanAsync(launchPlan, this, CancellationToken.None);'
+          if ([regex]::Matches($src,[regex]::Escape($good)).Count -ne 1) { throw 'Expected exactly one awaited call.' }
+          try {
+            [IO.File]::WriteAllBytes($path,[Text.Encoding]::UTF8.GetBytes($src.Replace($good,$bad)))
+            & "$env:RUNNER_TEMP/Invoke-InnoProof.ps1" Mutation
+            if ($LASTEXITCODE -ne 0) { throw "Mutation verifier failed: $LASTEXITCODE" }
+          } finally { [IO.File]::WriteAllBytes($path,$original) }
+      - id: restored
+        name: Verify restored source passes exact owner test again
+        if: ${{ (success() || failure()) && steps.startup.outcome == 'success' }}
+        working-directory: source
+        run: '& "$env:RUNNER_TEMP/Invoke-InnoProof.ps1" Restored'
+      - id: clean
+        name: Confirm original HEAD, clean worktree and byte identity
+        if: ${{ (success() || failure()) && steps.pin.outcome == 'success' }}
+        working-directory: source
+        run: |
+          $expected = (Get-Content (Join-Path $env:INNO_PROOF_EVIDENCE 'app-before.sha256') -Raw).Trim()
+          $actual = (Get-FileHash 'src/OpenClaw.Tray.WinUI/App.xaml.cs').Hash
+          $dirty = @(git status --porcelain)
+          if ($LASTEXITCODE -ne 0 -or $dirty.Count -ne 0 -or (git rev-parse HEAD) -cne 'dfda81ffb52e6a9fb1ba0876eed20ce05b17adb0' -or $actual -cne $expected) { throw "Worktree drift: $dirty" }
+      - name: Retain validation evidence
+        if: ${{ !cancelled() && steps.pin.outcome == 'success' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: inno-order-proof-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/inno-order-evidence/**/*.trx
+            ${{ runner.temp }}/inno-order-evidence/**/console.log
+            ${{ runner.temp }}/inno-order-evidence/full-build.log
+            ${{ runner.temp }}/inno-order-evidence/app-before.sha256
+          retention-days: 7
+          if-no-files-found: error
+      - name: Require every validation stage
+        if: ${{ !cancelled() }}
+        env:
+          OUTCOMES: ${{ toJSON(steps) }}
+        run: |
+          $steps = $env:OUTCOMES | ConvertFrom-Json
+          foreach ($name in 'pin','sdk','helper','build','shared','tray','inno','startup','mutation','restored','clean') {
+            if ($steps.$name.outcome -ne 'success') { throw "Gate $name was $($steps.$name.outcome)" }
+          }
