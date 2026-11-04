@@ -24,7 +24,12 @@ $env:OPENCLAW_TRAY_LOCALAPPDATA_DIR = Join-Path $work 'local'
   $env:OPENCLAW_TRAY_LOCALAPPDATA_DIR) | ForEach-Object { New-Item -ItemType Directory -Path $_ | Out-Null }
 $proxy = $null; $certificate = $null; $rootCertificate = $null; $key = $null; $store = $null
 $ruleNames = [System.Collections.Generic.List[string]]::new()
-$stage = 'source-admission'; $passed = $false; $failure = $null
+function Enter-ProofStage([string]$name) {
+    Write-Host "Issue 1642 proof: $name"
+    $name | Set-Content (Join-Path $evidence 'stage.txt')
+    return $name
+}
+$stage = Enter-ProofStage 'source-admission'; $passed = $false; $failure = $null
 $cleanupErrors = [System.Collections.Generic.List[string]]::new()
 $cleanupFile = Join-Path $env:RUNNER_TEMP 'openclaw-1642-cleanup.json'
 function Save-CleanupState {
@@ -64,13 +69,13 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Production source changed.' }
     $sourceFiles = @('src/OpenClaw.Tray.WinUI/Services/UpdatumUpdateBackend.cs','src/OpenClaw.Tray.WinUI/Services/UpdateCheckPipeline.cs','src/OpenClaw.Shared/OpenClawReleaseVersion.cs')
     @($sourceFiles | ForEach-Object { @{ path = $_; sha256 = (Get-FileHash -Algorithm SHA256 $_).Hash } }) | ConvertTo-Json | Set-Content (Join-Path $evidence 'production-source-hashes.json')
-    $stage = 'compile'
+    $stage = Enter-ProofStage 'compile'
     & dotnet --info | Set-Content (Join-Path $evidence 'dotnet-info.txt')
     & node --version | Set-Content (Join-Path $evidence 'node-version.txt')
     & dotnet build $project -c Release -r win-x64 --disable-build-servers --verbosity minimal 2>&1 |
         Tee-Object -FilePath (Join-Path $evidence 'build.log')
     if ($LASTEXITCODE -ne 0) { throw 'Proof project compilation failed.' }
-    $stage = 'network-isolation'
+    $stage = Enter-ProofStage 'network-isolation'
     if (@(Get-NetFirewallProfile | Where-Object { $_.Enabled.ToString() -ne 'True' }).Count -gt 0) {
         throw 'Firewall is not active; refusing unguarded proof, no global policy change made.'
     }
@@ -97,7 +102,7 @@ try {
     $ruleReceipt | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $evidence 'egress-rules.json')
     $env:OPENCLAW_UPDATER_PROOF_FIREWALL = '1'
     $env:OPENCLAW_UPDATER_PROOF_PROGRAMS = ConvertTo-Json -InputObject @($programs) -Compress
-    $stage = 'fixture-setup'
+    $stage = Enter-ProofStage 'fixture-setup'
     $key = [Security.Cryptography.RSA]::Create(2048)
     $request = [Security.Cryptography.X509Certificates.CertificateRequest]::new(
         ('CN=api.github.com, OU=OpenClaw1642-' + $id), $key, [Security.Cryptography.HashAlgorithmName]::SHA256,
@@ -115,12 +120,27 @@ try {
         $certificate.Export([Security.Cryptography.X509Certificates.X509ContentType]::Cert))
     Save-CleanupState
     $store = [Security.Cryptography.X509Certificates.X509Store]::new('Root','CurrentUser')
-    $store.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite); $store.Add($rootCertificate)
+    $stage = Enter-ProofStage 'fixture-current-user-trust'
+    $certFile = Join-Path $work 'fixture-public.cer'
+    [IO.File]::WriteAllBytes($certFile, $rootCertificate.RawData)
+    $import = Start-Process -FilePath "$env:SystemRoot/System32/certutil.exe" -PassThru -NoNewWindow `
+        -ArgumentList ('-user -f -addstore Root "{0}"' -f $certFile)
+    if (-not $import.WaitForExit(30000)) {
+        $import.Kill(); $import.WaitForExit()
+        throw 'CurrentUser fixture certificate import did not complete within 30s.'
+    }
+    if ($import.ExitCode -ne 0) { throw "CurrentUser fixture certificate import failed ($($import.ExitCode))." }
+    $store.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+    if ($store.Certificates.Find('FindByThumbprint',$rootCertificate.Thumbprint,$false).Count -ne 1) {
+        throw 'Temporary public fixture certificate missing from CurrentUser.'
+    }
+    $stage = Enter-ProofStage 'fixture-proxy-launch'
     $proxyScript = Join-Path $PSScriptRoot 'fixture-proxy.mjs'
     $parameters = @{ FilePath = (Get-Command node).Source; PassThru = $true;
         ArgumentList = @('"' + $proxyScript + '"','"' + $work + '"');
         RedirectStandardOutput = (Join-Path $work 'proxy.stdout'); RedirectStandardError = (Join-Path $work 'proxy.stderr') }
     $proxy = Start-Process @parameters
+    $stage = Enter-ProofStage 'fixture-proxy-readiness'
     Save-CleanupState
     $readyPath = Join-Path $work 'ready.json'; $deadline = [DateTime]::UtcNow.AddSeconds(30)
     while (-not (Test-Path $readyPath)) {
@@ -132,7 +152,7 @@ try {
     if ($ready.pid -ne $proxy.Id -or -not ([Uri]$ready.proxy).IsLoopback) { throw 'Invalid fixture receipt.' }
     $env:HTTPS_PROXY = $ready.proxy; $env:HTTP_PROXY = $ready.proxy; $env:ALL_PROXY = $ready.proxy
     $env:NO_PROXY = '127.0.0.1,localhost'; $env:OPENCLAW_UPDATER_PROOF_DIR = $work
-    $stage = 'production-backend-tests'
+    $stage = Enter-ProofStage 'production-backend-tests'
     $arguments = @('test', $project, '-c', 'Release', '-r', 'win-x64', '--no-build', '--no-restore',
         '--filter', 'FullyQualifiedName~ProductionUpdaterIntegrationTests', '--results-directory', $evidence,
         '--logger', 'trx;LogFileName=updater-integration.trx', '--blame-hang', '--blame-hang-dump-type', 'none', '--blame-hang-timeout', '2m')
@@ -146,7 +166,7 @@ try {
     & git diff --quiet HEAD -- src docs
     if ($LASTEXITCODE -ne 0) { throw 'Production source changed during proof.' }
     # Global evidence validation includes refusals without a caseId (review regression).
-    $stage = 'transport-evidence'
+    $stage = Enter-ProofStage 'transport-evidence'
     & node (Join-Path $PSScriptRoot 'verify-requests.mjs') (Join-Path $work 'requests.ndjson')
     if ($LASTEXITCODE -ne 0) { throw 'Unexpected or incomplete transport evidence.' }
     $passed = $true
@@ -157,7 +177,8 @@ finally {
     if (Test-Path (Join-Path $work 'requests.ndjson')) { Copy-Item (Join-Path $work 'requests.ndjson') (Join-Path $evidence 'requests.ndjson') }
     if ($store -and $rootCertificate) {
         try {
-            $store.Remove($rootCertificate)
+            $store.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+            if ($store.Certificates.Find('FindByThumbprint',$rootCertificate.Thumbprint,$false).Count) { $store.Remove($rootCertificate) }
             if ($store.Certificates.Find('FindByThumbprint',$rootCertificate.Thumbprint,$false).Count -ne 0) { throw 'Temporary trust remains.' }
         } catch { $cleanupErrors.Add('certificate cleanup: ' + $_.Exception.Message) }
     }
