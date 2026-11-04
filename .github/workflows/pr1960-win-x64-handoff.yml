@@ -1,0 +1,114 @@
+name: PR 1960 Windows x64 handoff
+
+on:
+  push:
+    branches: [codex/pr1960-windows-x64-handoff-20261104]
+
+permissions:
+  contents: read
+
+jobs:
+  handoff:
+    if: github.repository == 'MertBasar0/openclaw-windows-node' && github.actor == 'MertBasar0' && github.event.created && !github.event.deleted
+    runs-on: windows-2025-vs2026
+    timeout-minutes: 50
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      SOURCE_SHA: 4265c3ab5ed2f0daceb019741a1f707d74d1105e
+      BASELINE: 2026.10.5-alpha.34
+      TARGET: v2026.10.8-alpha.20
+      TARGET_ASSET: OpenClawTray-2026.10.8-alpha.20-win-x64.zip
+      ZIP_NAME: OpenClawTray-PR1960-4265c3ab-2026.10.5-alpha.34-win-x64.zip
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      DOTNET_NOLOGO: '1'
+    steps:
+      - name: Check out the verification code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: controller
+          sparse-checkout: .ci/pr1960-handoff
+          persist-credentials: false
+      - name: Check out the exact upstream PR source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: openclaw/openclaw-windows-node
+          ref: 4265c3ab5ed2f0daceb019741a1f707d74d1105e
+          path: source
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73
+        with:
+          dotnet-version: '10.0.403'
+      - name: Publish non-Dev unpackaged Release for the reporter's baseline
+        working-directory: source
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not $IsWindows -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') { throw 'Expected hosted Windows.' }
+          if ((git rev-parse HEAD) -cne $env:SOURCE_SHA -or @(git status --porcelain).Count) { throw 'Wrong or dirty source.' }
+          $publish = Join-Path $env:RUNNER_TEMP 'pr1960-publish'
+          $metadata = "$env:BASELINE+pr1960.$env:SOURCE_SHA"
+          $options = @(
+            '-p:DevBuild=false', '-p:PackageMsix=false',
+            '-p:UpdateAssemblyInfo=false', '-p:UpdateVersionProperties=false',
+            "-p:Version=$env:BASELINE", "-p:InformationalVersion=$metadata",
+            '-p:AssemblyVersion=2026.10.5.0', '-p:FileVersion=2026.10.5.0',
+            '-p:IncludeSourceRevisionInInformationalVersion=false'
+          )
+          dotnet restore src/OpenClaw.Tray.WinUI -r win-x64 @options
+          if ($LASTEXITCODE) { throw 'Restore failed.' }
+          dotnet publish src/OpenClaw.Tray.WinUI -c Release -r win-x64 --self-contained --no-restore -o $publish @options
+          if ($LASTEXITCODE) { throw 'x64 Release publish failed.' }
+          git diff --exit-code HEAD --
+          if ($LASTEXITCODE) { throw 'Tracked product sources changed.' }
+      - name: Verify ZIP payload and run its alpha update check
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $publish = Join-Path $env:RUNNER_TEMP 'pr1960-publish'
+          $zip = Join-Path $env:GITHUB_WORKSPACE $env:ZIP_NAME
+          $unpacked = Join-Path $env:RUNNER_TEMP 'pr1960-extracted'
+          [IO.Compression.ZipFile]::CreateFromDirectory($publish, $zip)
+          [IO.Compression.ZipFile]::ExtractToDirectory($zip, $unpacked)
+          if (Get-ChildItem $unpacked -Filter 'unins*') { throw 'Unexpected Inno uninstaller in app overlay.' }
+          ./source/scripts/Test-ReleaseNativeDependencies.ps1 -PayloadPath $unpacked -RequireAppLocalVCRuntime
+          if (-not $?) { throw 'Native dependency verification failed.' }
+          $release = Invoke-RestMethod "https://api.github.com/repos/openclaw/openclaw-windows-node/releases/tags/$env:TARGET"
+          $assets = @($release.assets | Where-Object { $_.name -ceq $env:TARGET_ASSET -and $_.state -eq 'uploaded' -and $_.size -gt 0 })
+          if ($release.tag_name -cne $env:TARGET -or $release.draft -or !$release.prerelease -or !$release.published_at -or $assets.Count -ne 1) { throw 'Expected published upstream alpha with compatible x64 ZIP.' }
+          New-Item -ItemType Directory evidence | Out-Null
+          $receipt = Join-Path $env:GITHUB_WORKSPACE 'evidence/verification.json'
+          dotnet run --project controller/.ci/pr1960-handoff/CheckPackage.csproj -c Release -- $unpacked $env:BASELINE $env:TARGET $receipt $env:TARGET_ASSET
+          if ($LASTEXITCODE) { throw 'Extracted runtime or live update check failed.' }
+          $hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $env:ZIP_NAME" | Set-Content -Encoding ascii evidence/SHA256SUMS
+          $proof = Get-Content $receipt -Raw | ConvertFrom-Json -AsHashtable
+          $proof.zip = $env:ZIP_NAME
+          $proof.sha256 = $hash
+          $proof.release = $release.html_url
+          $proof.targetAssetId = $assets[0].id
+          $proof.targetAssetDigest = $assets[0].digest
+          $proof.sdk = (dotnet --version)
+          $proof | ConvertTo-Json | Set-Content -LiteralPath $receipt -Encoding utf8
+          Get-Content $receipt >> $env:GITHUB_STEP_SUMMARY
+          "EXPECTED_SHA256=$hash" >> $env:GITHUB_ENV
+      - name: Upload the exact ZIP as a single downloadable file
+        id: package
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          path: ${{ env.ZIP_NAME }}
+          archive: false
+          if-no-files-found: error
+          retention-days: 30
+      - name: Verify GitHub artifact digest
+        env:
+          UPLOADED_SHA256: ${{ steps.package.outputs.artifact-digest }}
+        run: |
+          if (($env:UPLOADED_SHA256 -replace '^sha256:', '') -ine $env:EXPECTED_SHA256) { throw 'GitHub download digest differs from the ZIP hash.' }
+      - name: Upload verification receipt and SHA-256
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: PR1960-x64-handoff-verification
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 30
