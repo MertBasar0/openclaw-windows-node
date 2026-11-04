@@ -83,14 +83,16 @@ try {
         $ruleNames.Add($rule); Save-CleanupState
         $parameters = @{ Name = $rule; DisplayName = $rule; Direction = 'Outbound'; Action = 'Block';
             Program = $program; Profile = 'Any'; Enabled = 'True';
-            RemoteAddress = @('0.0.0.0-126.255.255.255','128.0.0.0-255.255.255.255','::/0') }
+            RemoteAddress = 'Any' }
         New-NetFirewallRule @parameters | Out-Null
     }
     $ruleReceipt = @(foreach ($name in $ruleNames) {
-        $rule = Get-NetFirewallRule -Name $name
+        $rule = Get-NetFirewallRule -PolicyStore ActiveStore -Name $name -ErrorAction Stop
+        $addresses = @($rule | Get-NetFirewallAddressFilter | Select-Object -ExpandProperty RemoteAddress)
+        if ($addresses.Count -ne 1 -or $addresses[0] -ne 'Any') { throw 'External egress block did not cover all addresses.' }
         if ($rule.Enabled.ToString() -ne 'True' -or $rule.Action -ne 'Block') { throw 'Egress rule inactive.' }
         @{ name = $name; program = ($rule | Get-NetFirewallApplicationFilter).Program;
-           remoteAddresses = @($rule | Get-NetFirewallAddressFilter | Select-Object -ExpandProperty RemoteAddress) }
+           remoteAddresses = $addresses }
     })
     $ruleReceipt | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $evidence 'egress-rules.json')
     $env:OPENCLAW_UPDATER_PROOF_FIREWALL = '1'
