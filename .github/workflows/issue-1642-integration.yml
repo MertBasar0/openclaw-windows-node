@@ -1,0 +1,92 @@
+{
+  "name": "Issue 1642 real Updatum integration",
+  "on": {
+    "push": {
+      "branches": [
+        "openclaw/issue-1642-integration-proof"
+      ],
+      "paths": [
+        ".ci/issue-1642-integration/**",
+        ".github/workflows/issue-1642-integration.yml"
+      ]
+    },
+    "workflow_dispatch": {}
+  },
+  "permissions": {
+    "contents": "read"
+  },
+  "concurrency": {
+    "group": "issue-1642-integration-${{ github.ref }}",
+    "cancel-in-progress": false
+  },
+  "jobs": {
+    "proof": {
+      "if": "github.repository == 'MertBasar0/openclaw-windows-node' && github.ref == 'refs/heads/openclaw/issue-1642-integration-proof'",
+      "runs-on": "windows-2025",
+      "timeout-minutes": 20,
+      "steps": [
+        {
+          "name": "Checkout controller",
+          "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "with": {
+            "path": "control",
+            "persist-credentials": false,
+            "fetch-depth": 1
+          }
+        },
+        {
+          "name": "Checkout exact product candidate",
+          "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "with": {
+            "repository": "openclaw/openclaw-windows-node",
+            "ref": "4265c3ab5ed2f0daceb019741a1f707d74d1105e",
+            "path": "source",
+            "persist-credentials": false,
+            "fetch-depth": 0
+          }
+        },
+        {
+          "name": "Setup pinned SDK",
+          "uses": "actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1",
+          "with": {
+            "dotnet-version": "10.0.402"
+          }
+        },
+        {
+          "name": "Setup fixture runtime",
+          "uses": "actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38",
+          "with": {
+            "node-version": "24"
+          }
+        },
+        {
+          "name": "Fixture infrastructure checks",
+          "shell": "pwsh",
+          "run": "node --test ./control/.ci/issue-1642-integration/fixture-proxy.test.mjs ./control/.ci/issue-1642-integration/verify-requests.test.mjs"
+        },
+        {
+          "name": "Run actual backend proof",
+          "shell": "pwsh",
+          "run": "./control/.ci/issue-1642-integration/Run-Integration.ps1 -RepoRoot ./source -EvidenceRoot ./evidence/issue1642"
+        },
+        {
+          "name": "Clean task trust and rules",
+          "if": "always()",
+          "shell": "pwsh",
+          "run": "./control/.ci/issue-1642-integration/Cleanup-Integration.ps1"
+        },
+        {
+          "name": "Upload narrow evidence",
+          "if": "always()",
+          "uses": "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9",
+          "with": {
+            "name": "issue1642-real-backend-evidence",
+            "path": "evidence/issue1642/*.trx\nevidence/issue1642/*.log\nevidence/issue1642/*.json\nevidence/issue1642/*.ndjson\nevidence/issue1642/*.txt",
+            "if-no-files-found": "warn",
+            "retention-days": 7
+          }
+        }
+      ]
+    }
+  }
+}
