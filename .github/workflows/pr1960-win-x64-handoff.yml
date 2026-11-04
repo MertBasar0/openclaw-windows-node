@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   handoff:
-    if: github.repository == 'MertBasar0/openclaw-windows-node' && github.actor == 'MertBasar0' && github.event.created && !github.event.deleted
+    if: github.repository == 'MertBasar0/openclaw-windows-node' && github.actor == 'MertBasar0' && github.event.before == 'a3ffa736d6ff01863cb8ff0defb3ae76843e8f59' && !github.event.deleted
     runs-on: windows-2025-vs2026
     timeout-minutes: 50
     defaults:
@@ -20,6 +20,8 @@ jobs:
       BASELINE: 2026.10.5-alpha.34
       TARGET: v2026.10.8-alpha.20
       TARGET_ASSET: OpenClawTray-2026.10.8-alpha.20-win-x64.zip
+      # Mirror the upstream non-tag x64 Release smoke job.
+      RequireSignedCleanupHost: "${{ startsWith(github.ref, 'refs/tags/v') }}"
       ZIP_NAME: OpenClawTray-PR1960-4265c3ab-2026.10.5-alpha.34-win-x64.zip
       DOTNET_CLI_TELEMETRY_OPTOUT: '1'
       DOTNET_NOLOGO: '1'
@@ -73,6 +75,8 @@ jobs:
           if (Get-ChildItem $unpacked -Filter 'unins*') { throw 'Unexpected Inno uninstaller in app overlay.' }
           ./source/scripts/Test-ReleaseNativeDependencies.ps1 -PayloadPath $unpacked -RequireAppLocalVCRuntime
           if (-not $?) { throw 'Native dependency verification failed.' }
+          ./source/scripts/Test-CleanupHostSignature.ps1 -AssemblyPath (Join-Path $unpacked 'OpenClaw.SetupEngine.dll') -HostPath './source/src/OpenClaw.GatewayCleanupHost/bin/Release/net48/OpenClaw.GatewayCleanupHost.exe'
+          if (-not $?) { throw 'Embedded cleanup helper verification failed.' }
           $release = Invoke-RestMethod "https://api.github.com/repos/openclaw/openclaw-windows-node/releases/tags/$env:TARGET"
           $assets = @($release.assets | Where-Object { $_.name -ceq $env:TARGET_ASSET -and $_.state -eq 'uploaded' -and $_.size -gt 0 })
           if ($release.tag_name -cne $env:TARGET -or $release.draft -or !$release.prerelease -or !$release.published_at -or $assets.Count -ne 1) { throw 'Expected published upstream alpha with compatible x64 ZIP.' }
