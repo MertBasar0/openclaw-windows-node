@@ -2,27 +2,28 @@ name: PR 1960 Windows x64 handoff
 
 on:
   push:
-    branches: [codex/pr1960-windows-x64-handoff-20261104]
+    branches: [test/pr1960-windows-x64-handoff-20261109]
 
 permissions:
   contents: read
 
 jobs:
   handoff:
-    if: github.repository == 'MertBasar0/openclaw-windows-node' && github.actor == 'MertBasar0' && github.event.before == 'a3ffa736d6ff01863cb8ff0defb3ae76843e8f59' && !github.event.deleted
+    if: github.repository == 'MertBasar0/openclaw-windows-node' && github.actor == 'MertBasar0' && github.event.created && !github.event.deleted
     runs-on: windows-2025-vs2026
     timeout-minutes: 50
     defaults:
       run:
         shell: pwsh
     env:
-      SOURCE_SHA: 4265c3ab5ed2f0daceb019741a1f707d74d1105e
-      BASELINE: 2026.10.5-alpha.34
-      TARGET: v2026.10.8-alpha.20
-      TARGET_ASSET: OpenClawTray-2026.10.8-alpha.20-win-x64.zip
+      SOURCE_SHA: 0dc2a5da2a09135b6ce74c2d0b83793899f8f402
+      BASELINE: 2026.11.1
+      NUMERIC_BASELINE: 2026.11.1.0
+      TARGET: v2026.11.2-alpha.10
+      TARGET_ASSET: OpenClawTray-2026.11.2-alpha.10-win-x64.zip
       # Mirror the upstream non-tag x64 Release smoke job.
       RequireSignedCleanupHost: "${{ startsWith(github.ref, 'refs/tags/v') }}"
-      ZIP_NAME: OpenClawTray-PR1960-4265c3ab-2026.10.5-alpha.34-win-x64.zip
+      ZIP_NAME: OpenClawTray-PR1960-0dc2a5da-2026.11.1-win-x64.zip
       DOTNET_CLI_TELEMETRY_OPTOUT: '1'
       DOTNET_NOLOGO: '1'
     steps:
@@ -36,7 +37,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: openclaw/openclaw-windows-node
-          ref: 4265c3ab5ed2f0daceb019741a1f707d74d1105e
+          ref: 0dc2a5da2a09135b6ce74c2d0b83793899f8f402
           path: source
           fetch-depth: 0
           persist-credentials: false
@@ -55,7 +56,7 @@ jobs:
             '-p:DevBuild=false', '-p:PackageMsix=false',
             '-p:UpdateAssemblyInfo=false', '-p:UpdateVersionProperties=false',
             "-p:Version=$env:BASELINE", "-p:InformationalVersion=$metadata",
-            '-p:AssemblyVersion=2026.10.5.0', '-p:FileVersion=2026.10.5.0',
+            "-p:AssemblyVersion=$env:NUMERIC_BASELINE", "-p:FileVersion=$env:NUMERIC_BASELINE",
             '-p:IncludeSourceRevisionInInformationalVersion=false'
           )
           dotnet restore src/OpenClaw.Tray.WinUI -r win-x64 @options
@@ -82,7 +83,7 @@ jobs:
           if ($release.tag_name -cne $env:TARGET -or $release.draft -or !$release.prerelease -or !$release.published_at -or $assets.Count -ne 1) { throw 'Expected published upstream alpha with compatible x64 ZIP.' }
           New-Item -ItemType Directory evidence | Out-Null
           $receipt = Join-Path $env:GITHUB_WORKSPACE 'evidence/verification.json'
-          dotnet run --project controller/.ci/pr1960-handoff/CheckPackage.csproj -c Release -- $unpacked $env:BASELINE $env:TARGET $receipt $env:TARGET_ASSET
+          dotnet run --project controller/.ci/pr1960-handoff/CheckPackage.csproj -c Release -- $unpacked $env:BASELINE $env:TARGET $receipt $env:TARGET_ASSET $env:NUMERIC_BASELINE
           if ($LASTEXITCODE) { throw 'Extracted runtime or live update check failed.' }
           $hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  $env:ZIP_NAME" | Set-Content -Encoding ascii evidence/SHA256SUMS

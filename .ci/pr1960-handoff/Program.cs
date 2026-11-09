@@ -9,6 +9,7 @@ var version = args[1];
 var target = args[2];
 var receipt = args[3];
 var targetAsset = args[4];
+var numericBaseline = Version.Parse(args[5]);
 
 void Require(bool value, string message)
 {
@@ -29,7 +30,7 @@ var projection = app.GetType("OpenClawTray.Presentation.SettingsAppInfoProjectio
 var settings = (string)projection.GetMethod("ResolveDisplayVersion")!.Invoke(null, [displayed, null])!;
 Require(current == version && settings == "v" + version, $"Unexpected packaged runtime/Settings version: {current} / {settings}.");
 var numeric = app.GetName().Version;
-Require(numeric == Assembly.GetExecutingAssembly().GetName().Version && numeric == new Version(2026, 10, 5, 0), $"Unexpected Updatum numeric baseline: {numeric}.");
+Require(numeric == Assembly.GetExecutingAssembly().GetName().Version && numeric == numericBaseline, $"Unexpected Updatum numeric baseline: {numeric}.");
 var productVersion = FileVersionInfo.GetVersionInfo(app.Location).ProductVersion;
 Require(productVersion?.Split('+')[0] == version, $"Unexpected WinUI product version: {productVersion}.");
 Require(!(bool)app.GetType("OpenClawTray.AppIdentity", true)!.GetProperty("IsDev")!.GetValue(null)!, "The packaged app has a development identity.");
