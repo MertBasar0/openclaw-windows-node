@@ -6,6 +6,6 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <!-- Updatum reads the entry assembly of its host process. Match the verified Tray assembly. -->
-    <AssemblyVersion>2026.10.5.0</AssemblyVersion>
+    <AssemblyVersion>2026.11.1.0</AssemblyVersion>
   </PropertyGroup>
 </Project>
