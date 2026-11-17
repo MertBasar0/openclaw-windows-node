@@ -647,8 +647,10 @@ procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then
   begin
-    MigrateLegacyStartupShortcut;
+    { Rewrite an argument-free Run value first. The shortcut migration retires the shortcut
+      only when the Run value is already the --background command. }
     MigrateLegacyBackgroundLaunch;
+    MigrateLegacyStartupShortcut;
   end;
 end;
 

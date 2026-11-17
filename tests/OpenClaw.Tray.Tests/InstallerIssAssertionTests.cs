@@ -116,6 +116,23 @@ public sealed class InstallerIssAssertionTests
     }
 
     [Fact]
+    public void Installer_RewritesTheArgumentFreeRunValueBeforeRetiringTheStartupShortcut()
+    {
+        var iss = File.ReadAllText(Path.Combine(TestRepositoryPaths.GetRepositoryRoot(), "installer.iss"));
+        var start = iss.IndexOf("procedure CurStepChanged", StringComparison.Ordinal);
+        var end = iss.IndexOf("end;", iss.IndexOf("end;", start, StringComparison.Ordinal) + 1, StringComparison.Ordinal);
+        var postInstall = iss[start..end];
+
+        // An earlier setup fallback stored the argument-free "<exe>" Run value next to the installer
+        // shortcut. The shortcut migration retires the shortcut only when the Run value is already the
+        // --background command, so the Run rewrite must run first or both registrations survive.
+        var runRewrite = postInstall.IndexOf("MigrateLegacyBackgroundLaunch;", StringComparison.Ordinal);
+        var shortcutRetire = postInstall.IndexOf("MigrateLegacyStartupShortcut;", StringComparison.Ordinal);
+        Assert.True(runRewrite >= 0 && shortcutRetire >= 0, "Both startup migrations must run after install.");
+        Assert.True(runRewrite < shortcutRetire, "The Run value must be rewritten before the shortcut migration reads it.");
+    }
+
+    [Fact]
     public void Installer_ArgumentFreeRunMigrationAlwaysQuotesTheExecutable()
     {
         var iss = File.ReadAllText(Path.Combine(TestRepositoryPaths.GetRepositoryRoot(), "installer.iss"));
