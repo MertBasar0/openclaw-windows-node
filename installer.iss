@@ -484,11 +484,14 @@ var
   ResultCode: Integer;
 begin
   ExecutablePath := ExpandConstant('{app}\{#MyAppExeName}');
-  { Only migrate the exact old argument-free registration for this installation. }
+  { Only migrate this installation's exact old registrations: the argument-free value, and
+    the unquoted --background value that earlier versions of this migration wrote for a path
+    without spaces. The shortcut migration and the app accept only the quoted command. }
   if RegQueryStringValue(HKCU, 'SOFTWARE\Microsoft\Windows\CurrentVersion\Run',
       '{#MyAutoStartName}', RunCommand) then
   begin
-    if CompareText(RemoveQuotes(RunCommand), ExecutablePath) = 0 then
+    if (CompareText(RemoveQuotes(RunCommand), ExecutablePath) = 0) or
+        (CompareText(Trim(RunCommand), ExecutablePath + ' --background') = 0) then
     begin
       if RegWriteStringValue(HKCU, 'SOFTWARE\Microsoft\Windows\CurrentVersion\Run',
           '{#MyAutoStartName}', '"' + ExecutablePath + '" --background') then
@@ -647,7 +650,7 @@ procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then
   begin
-    { Rewrite an argument-free Run value first. The shortcut migration retires the shortcut
+    { Rewrite an old Run value first. The shortcut migration retires the shortcut
       only when the Run value is already the --background command. }
     MigrateLegacyBackgroundLaunch;
     MigrateLegacyStartupShortcut;

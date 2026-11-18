@@ -146,6 +146,21 @@ public sealed class InstallerIssAssertionTests
     }
 
     [Fact]
+    public void Installer_RunMigrationQuotesTheUnquotedBackgroundValueEarlierInstallersWrote()
+    {
+        var iss = File.ReadAllText(Path.Combine(TestRepositoryPaths.GetRepositoryRoot(), "installer.iss"));
+        var start = iss.IndexOf("procedure MigrateLegacyBackgroundLaunch;", StringComparison.Ordinal);
+        var end = iss.IndexOf("  try", start, StringComparison.Ordinal);
+        var runMigration = iss[start..end];
+
+        // Earlier versions of this migration wrote <exe> --background with AddQuotes, which leaves a
+        // path without spaces unquoted. The shortcut migration and the app accept only the quoted
+        // command, so that value must be rewritten too or it survives next to the shortcut.
+        Assert.Contains("CompareText(Trim(RunCommand), ExecutablePath + ' --background') = 0", runMigration);
+        Assert.Contains("""'{#MyAutoStartName}', '"' + ExecutablePath + '" --background')""", runMigration);
+    }
+
+    [Fact]
     public void Installer_DoesNotMigrateAWindowsDisabledStartupShortcut()
     {
         var iss = File.ReadAllText(Path.Combine(TestRepositoryPaths.GetRepositoryRoot(), "installer.iss"));
